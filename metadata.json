@@ -1,0 +1,6 @@
+{
+  "name": "Central WhatsApp Viagens",
+  "description": "Central de atendimento multicanal via WhatsApp para agências de viagens com fila de espera, distribuição atômica de conversas e múltiplos atendentes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

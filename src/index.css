@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+body {
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  background-color: #f8fafc;
+  color: #1e293b;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Authentic WhatsApp subtle background pattern styling */
+.whatsapp-chat-bg {
+  background-color: #efeae2;
+  background-image: radial-gradient(#d8d0c5 0.75px, transparent 0.75px);
+  background-size: 16px 16px;
+}
