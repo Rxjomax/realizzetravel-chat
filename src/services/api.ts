@@ -42,12 +42,21 @@ class ApiService {
     if (!res.ok) {
       let errorMessage = 'Ocorreu um erro ao processar sua solicitação.';
       try {
-        const errorData = await res.json();
-        if (errorData.error) {
-          errorMessage = errorData.error;
+        const rawText = await res.text();
+        try {
+          const errorData = JSON.parse(rawText);
+          if (errorData.error) {
+            errorMessage = errorData.error;
+          }
+        } catch {
+          if (rawText && rawText.length < 200 && !rawText.includes('<html')) {
+            errorMessage = rawText;
+          } else {
+            errorMessage = `Erro ${res.status} (${res.statusText || 'Falha no servidor'}). Tente novamente.`;
+          }
         }
       } catch (e) {
-        errorMessage = `Erro ${res.status}: ${res.statusText}`;
+        errorMessage = `Erro ${res.status}: ${res.statusText || 'Falha na comunicação com o servidor'}`;
       }
       throw new Error(errorMessage);
     }

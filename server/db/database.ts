@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
+import type { Database as SqlJsDatabase } from 'sql.js';
+// @ts-ignore
+import initSqlAsm from 'sql.js/dist/sql-asm.js';
 import { SCHEMA_SQL } from './schema.constant';
 
 let dbInstance: SqlJsDatabase | null = null;
@@ -21,7 +23,8 @@ export async function getDatabase(): Promise<SqlJsDatabase> {
     console.warn('Notice creating DATA_DIR:', dirErr);
   }
 
-  const SQL = await initSqlJs();
+  const initFn = typeof initSqlAsm === 'function' ? initSqlAsm : (initSqlAsm as any)?.default;
+  const SQL = await initFn();
 
   if (fs.existsSync(DB_FILE)) {
     try {
