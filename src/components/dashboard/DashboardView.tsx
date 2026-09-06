@@ -12,8 +12,8 @@ import {
   ArrowRight,
   TrendingUp,
   Radio,
-  Send,
-  Sparkles,
+  Compass,
+  MapPin,
 } from 'lucide-react';
 
 interface DashboardViewProps {
@@ -34,11 +34,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToChat }
 
   const [attendants, setAttendants] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [simModalOpen, setSimModalOpen] = useState(false);
-  const [simName, setSimName] = useState('Mariana Rios');
-  const [simPhone, setSimPhone] = useState('+55 11 98888-7766');
-  const [simMessage, setSimMessage] = useState('Olá! Gostaria de uma cotação para pacote de réveillon em Porto Seguro com aéreo.');
-  const [isSimulating, setIsSimulating] = useState(false);
 
   const fetchDashboardData = async () => {
     try {
@@ -64,6 +59,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToChat }
     const unbindClosed = socketClient.on('conversation:closed', () => fetchDashboardData());
     const unbindAttendants = socketClient.on('attendants:updated', () => fetchDashboardData());
     const unbindPollSync = socketClient.on('poll:sync', () => fetchDashboardData());
+    const unbindCleared = socketClient.on('conversation:cleared', () => fetchDashboardData());
 
     return () => {
       unbindCreated();
@@ -71,27 +67,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToChat }
       unbindClosed();
       unbindAttendants();
       unbindPollSync();
+      unbindCleared();
     };
   }, []);
-
-  const handleSimulateInbound = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!simMessage) return;
-    setIsSimulating(true);
-    try {
-      await api.simulateWhatsAppMessage({
-        name: simName,
-        phone: simPhone,
-        message: simMessage,
-      });
-      setSimModalOpen(false);
-      await fetchDashboardData();
-    } catch (err) {
-      console.error('Simulation error:', err);
-    } finally {
-      setIsSimulating(false);
-    }
-  };
 
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-7xl mx-auto w-full">
@@ -107,14 +85,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToChat }
         </div>
 
         <div className="flex items-center gap-2.5">
-          <button
-            onClick={() => setSimModalOpen(true)}
-            className="px-3.5 py-2 rounded-lg bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 border border-slate-200 flex items-center gap-1.5 transition-colors shadow-xs"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-            <span>Simular WhatsApp</span>
-          </button>
-
           <button
             onClick={onNavigateToChat}
             className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-xs font-bold text-white flex items-center gap-2 shadow-xs transition-all"
@@ -305,26 +275,42 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToChat }
                 </p>
               </div>
 
-              <div className="p-4 rounded-lg bg-slate-50 border border-slate-100">
-                <div className="font-bold text-slate-800 mb-1.5">Produtos mais consultados hoje</div>
-                <ul className="text-slate-600 space-y-1.5 mt-2">
-                  <li className="flex items-center justify-between">
-                    <span>Pacotes Porto Seguro & Nordeste</span>
-                    <span className="font-bold text-slate-800">38%</span>
-                  </li>
-                  <li className="flex items-center justify-between">
-                    <span>Cruzeiros Costa / MSC Réveillon</span>
-                    <span className="font-bold text-slate-800">27%</span>
-                  </li>
-                  <li className="flex items-center justify-between">
-                    <span>Passagens aéreas nacionais</span>
-                    <span className="font-bold text-slate-800">22%</span>
-                  </li>
-                  <li className="flex items-center justify-between">
-                    <span>Disney / Orlando e Exterior</span>
-                    <span className="font-bold text-slate-800">13%</span>
-                  </li>
-                </ul>
+              <div className="p-4 rounded-lg bg-slate-50 border border-slate-100 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                    <Compass className="w-3.5 h-3.5 text-blue-600" />
+                    Destinos Mais Procurados (Interesse)
+                  </div>
+                  <span className="text-[10px] text-blue-600 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded font-bold">
+                    WhatsApp
+                  </span>
+                </div>
+
+                <div className="space-y-2 text-xs">
+                  {[
+                    { name: 'Porto Seguro & Arraial, BA', percent: 38, count: 42, color: 'bg-blue-600' },
+                    { name: 'Maceió & Maragogi, AL', percent: 27, count: 30, color: 'bg-cyan-500' },
+                    { name: 'Natal & Praia da Pipa, RN', percent: 22, count: 25, color: 'bg-teal-500' },
+                    { name: 'Gramado & Canela, RS', percent: 18, count: 20, color: 'bg-emerald-500' },
+                    { name: 'Cruzeiros Réveillon / MSC', percent: 14, count: 16, color: 'bg-indigo-500' },
+                  ].map((dest, i) => (
+                    <div key={i} className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-semibold text-slate-700 truncate">{dest.name}</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-slate-400">{dest.count} cotações</span>
+                          <span className="font-bold text-slate-900 w-8 text-right">{dest.percent}%</span>
+                        </div>
+                      </div>
+                      <div className="w-full bg-slate-200/80 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className={`${dest.color} h-1.5 rounded-full`}
+                          style={{ width: `${dest.percent * 2.5}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
@@ -340,113 +326,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToChat }
           </div>
         </div>
       </div>
-
-      {/* Simulation Modal */}
-      {simModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 max-w-md w-full shadow-2xl">
-            <h3 className="text-base font-bold text-slate-800 mb-1 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-blue-600" />
-              Simular Mensagem de Cliente via WhatsApp
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Dispara o pipeline oficial do webhook. A mensagem entrará na fila imediatamente como &quot;Aguardando&quot; para todos os atendentes em tempo real.
-            </p>
-
-            <form onSubmit={handleSimulateInbound} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-slate-700 font-semibold mb-1">Exemplos Prontos (Clique para preencher):</label>
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSimName('Mariana Ferreira');
-                      setSimPhone('+55 (11) 98765-4321');
-                      setSimMessage('Olá! Gostaria de uma cotação para pacote em Porto Seguro para 4 pessoas na segunda quinzena de Julho. Vocês têm opções com resort all-inclusive?');
-                    }}
-                    className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 rounded-lg text-[11px] font-medium transition-colors border border-slate-200"
-                  >
-                    🏖️ Pacote Porto Seguro
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSimName('Ricardo & Patrícia');
-                      setSimPhone('+55 (21) 99888-1122');
-                      setSimMessage('Boa tarde! Estamos buscando um Cruzeiro MSC ou Costa para o Réveillon saindo de Santos ou Rio de Janeiro. Ainda há cabines disponíveis?');
-                    }}
-                    className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 rounded-lg text-[11px] font-medium transition-colors border border-slate-200"
-                  >
-                    🚢 Cruzeiro Réveillon
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSimName('Lucas Mendes');
-                      setSimPhone('+55 (31) 97123-8899');
-                      setSimMessage('Oi! Preciso de passagem de ida e volta para Lisboa para 2 adultos em outubro. Qual o valor aproximado e formas de parcelamento?');
-                    }}
-                    className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 rounded-lg text-[11px] font-medium transition-colors border border-slate-200"
-                  >
-                    ✈️ Passagem Internacional
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-700 font-semibold mb-1">Nome do Passageiro / Cliente</label>
-                <input
-                  type="text"
-                  required
-                  value={simName}
-                  onChange={(e) => setSimName(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-700 font-semibold mb-1">WhatsApp</label>
-                <input
-                  type="text"
-                  required
-                  value={simPhone}
-                  onChange={(e) => setSimPhone(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-700 font-semibold mb-1">Mensagem enviada pelo cliente</label>
-                <textarea
-                  rows={3}
-                  required
-                  value={simMessage}
-                  onChange={(e) => setSimMessage(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setSimModalOpen(false)}
-                  className="px-3.5 py-2 text-slate-500 hover:text-slate-800 font-medium"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSimulating}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-lg flex items-center gap-1.5 shadow-xs transition-colors"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  <span>{isSimulating ? 'Enviando...' : 'Receber na Fila'}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
+

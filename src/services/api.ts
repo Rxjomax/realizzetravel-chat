@@ -1,5 +1,5 @@
-import { AuthResponse, Conversation, Customer, LoginCredentials, Message, User, UserStatus } from '../types';
-import { DEMO_USERS, DEMO_CUSTOMERS, DEMO_CONVERSATIONS, DEMO_MESSAGES } from './localFallbackStore';
+import { AuthResponse, Conversation, Customer, LoginCredentials, Message, User, UserRole, UserStatus, WhatsAppConfig, WhatsAppGroup } from '../types';
+import { DEMO_USERS, DEMO_CUSTOMERS, DEMO_CONVERSATIONS, DEMO_MESSAGES, DEMO_WHATSAPP_GROUPS, loadStoredUsers, saveStoredUsers } from './localFallbackStore';
 
 const API_BASE = '/api';
 
@@ -12,18 +12,26 @@ class ApiService {
   private localConversations: Conversation[] = [];
   private localCustomers: Customer[] = [];
   private localMessages: Record<string, Message[]> = {};
+  private localWhatsAppGroups: WhatsAppGroup[] = [];
   private currentUser: User | null = null;
 
   constructor() {
     this.token = localStorage.getItem('realizzetravel_token') || localStorage.getItem('voolivre_token');
+    const storedUser = localStorage.getItem('auth_user');
+    if (storedUser) {
+      try {
+        this.currentUser = JSON.parse(storedUser);
+      } catch {}
+    }
     this.initLocalStore();
   }
 
   private initLocalStore() {
-    this.localUsers = [...DEMO_USERS];
+    this.localUsers = loadStoredUsers();
     this.localConversations = [...DEMO_CONVERSATIONS];
     this.localCustomers = [...DEMO_CUSTOMERS];
     this.localMessages = JSON.parse(JSON.stringify(DEMO_MESSAGES));
+    this.localWhatsAppGroups = JSON.parse(JSON.stringify(DEMO_WHATSAPP_GROUPS));
   }
 
   public setToken(token: string | null): void {
@@ -103,7 +111,18 @@ class ApiService {
     } catch (err: any) {
       // If Vercel Lambda fails (gru1::FUNCTION_INVOCATION_FAILED), log the user in locally without blocking presentation
       const cleanEmail = credentials.email.toLowerCase().trim().replace('@voolivre.com.br', '@realizzetravel.com.br');
-      const foundUser = this.localUsers.find(u => u.email.toLowerCase() === cleanEmail);
+      const emailAliases: Record<string, string> = {
+        'joao@realizzetravel.com.br': 'consultor1@realizzetravel.com.br',
+        'maria@realizzetravel.com.br': 'consultor2@realizzetravel.com.br',
+        'pedro@realizzetravel.com.br': 'consultor3@realizzetravel.com.br',
+        'anapaula@realizzetravel.com.br': 'consultor4@realizzetravel.com.br',
+        'lucas@realizzetravel.com.br': 'consultor5@realizzetravel.com.br',
+        'beatriz@realizzetravel.com.br': 'consultor6@realizzetravel.com.br',
+      };
+      const targetEmail = emailAliases[cleanEmail] || cleanEmail;
+      const foundUser = this.localUsers.find(
+        u => u.email.toLowerCase() === targetEmail || u.email.toLowerCase() === cleanEmail
+      );
 
       if (foundUser) {
         console.info('✅ Login autenticado via modo de demonstração local para:', foundUser.name);
@@ -193,9 +212,13 @@ class ApiService {
 
   public async updateUserStatus(userId: string, status: UserStatus): Promise<{ success: boolean; status: UserStatus }> {
     const user = this.localUsers.find(u => u.id === userId);
-    if (user) user.status = status;
+    if (user) {
+      user.status = status;
+      saveStoredUsers(this.localUsers);
+    }
     if (this.currentUser && this.currentUser.id === userId) {
       this.currentUser.status = status;
+      localStorage.setItem('auth_user', JSON.stringify(this.currentUser));
     }
 
     if (this.isFallbackMode) {
@@ -211,19 +234,140 @@ class ApiService {
     }
   }
 
+  public async updateUser(
+    userId: string,
+    data: Partial<Pick<User, 'name' | 'email' | 'role' | 'avatar' | 'status'>>
+  ): Promise<{ success: boolean; user: User }> {
+    const idx = this.localUsers.findIndex(u => u.id === userId);
+    if (idx !== -1) {
+      this.localUsers[idx] = {
+        ...this.localUsers[idx],
+        ...data,
+        updated_at: new Date().toISOString(),
+      };
+      saveStoredUsers(this.localUsers);
+
+      if (this.currentUser && this.currentUser.id === userId) {
+        this.currentUser = {
+          ...this.currentUser,
+          ...data,
+          updated_at: new Date().toISOString(),
+        };
+        localStorage.setItem('auth_user', JSON.stringify(this.currentUser));
+      }
+
+      // Update in assigned conversations
+      this.localConversations.forEach(c => {
+        if (c.assigned_user_id === userId && c.assigned_user) {
+          if (data.name) c.assigned_user.name = data.name;
+          if (data.avatar !== undefined) c.assigned_user.avatar = data.avatar;
+          if (data.email) c.assigned_user.email = data.email;
+        }
+      });
+    }
+
+    try {
+      const res = await this.request<{ success: boolean; message?: string; user?: User }>(`/users/${userId}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      });
+      return { success: true, user: res.user || this.localUsers[idx] };
+    } catch {
+      return { success: true, user: this.localUsers[idx] };
+    }
+  }
+
+  public async createUser(data: {
+    name: string;
+    email: string;
+    role: UserRole;
+    avatar?: string;
+    password?: string;
+  }): Promise<{ success: boolean; user: User }> {
+    const id = 'usr_' + Date.now();
+    const newUser: User = {
+      id,
+      organization_id: 'org_realizzetravel',
+      name: data.name,
+      email: data.email,
+      role: data.role,
+      status: 'ONLINE',
+      avatar: data.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&h=120&fit=crop&crop=face',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      last_seen_at: new Date().toISOString(),
+    };
+
+    this.localUsers.push(newUser);
+    saveStoredUsers(this.localUsers);
+
+    try {
+      const res = await this.request<{ user: User }>('/users', {
+        method: 'POST',
+        body: JSON.stringify({ ...data, password: data.password || 'viagens123' }),
+      });
+      return { success: true, user: res.user || newUser };
+    } catch {
+      return { success: true, user: newUser };
+    }
+  }
+
+  public async deleteUser(userId: string): Promise<{ success: boolean }> {
+    this.localUsers = this.localUsers.filter(u => u.id !== userId);
+    saveStoredUsers(this.localUsers);
+
+    // Unassign any conversations currently assigned to this user
+    this.localConversations.forEach(c => {
+      if (c.assigned_user_id === userId) {
+        c.assigned_user_id = undefined;
+        c.assigned_user = undefined;
+        if (c.status === 'ASSIGNED' || c.status === 'OPEN') {
+          c.status = 'WAITING';
+        }
+      }
+    });
+
+    try {
+      await this.request(`/users/${userId}`, { method: 'DELETE' });
+    } catch {
+      // local fallback handled
+    }
+    return { success: true };
+  }
+
   // Conversations Endpoints
   public async getConversations(filter?: string, search?: string): Promise<{ conversations: Conversation[] }> {
+    // Regra de Negócio: Se o atendente não interagir no chat em 1 dia (24h), o cliente volta para aguardando
+    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    this.localConversations.forEach(c => {
+      if ((c.status === 'OPEN' || c.status === 'ASSIGNED') && c.assigned_user_id) {
+        const updatedTime = c.updated_at ? new Date(c.updated_at).getTime() : 0;
+        const msgTime = c.last_message_at ? new Date(c.last_message_at).getTime() : 0;
+        const lastActivity = Math.max(updatedTime, msgTime);
+        if (lastActivity > 0 && lastActivity < oneDayAgo) {
+          c.status = 'WAITING';
+          c.assigned_user_id = null;
+          c.assigned_user = null;
+          c.auto_requeued_inactivity = true;
+          c.updated_at = new Date().toISOString();
+        }
+      }
+    });
+
     if (this.isFallbackMode) {
       let list = [...this.localConversations];
-      if (filter === 'waiting') {
+      const normFilter = (filter || '').toLowerCase();
+
+      if (normFilter === 'waiting' || normFilter === 'aguardando') {
         list = list.filter(c => c.status === 'WAITING');
-      } else if (filter === 'mine' && this.currentUser) {
+      } else if (normFilter === 'mine' || normFilter === 'my' || normFilter === 'minhas') {
         list = list.filter(c => c.assigned_user_id === this.currentUser?.id);
-      } else if (filter === 'open') {
-        list = list.filter(c => c.status === 'OPEN');
-      } else if (filter === 'closed') {
+      } else if (normFilter === 'open' || normFilter === 'em atendimento' || normFilter === 'andamento') {
+        list = list.filter(c => c.status === 'OPEN' || c.status === 'ASSIGNED');
+      } else if (normFilter === 'closed' || normFilter === 'encerradas' || normFilter === 'finalizadas') {
         list = list.filter(c => c.status === 'CLOSED');
       }
+      // 'all' or 'total' returns all list
 
       if (search) {
         const q = search.toLowerCase();
@@ -288,12 +432,23 @@ class ApiService {
   }
 
   public async assignConversation(id: string): Promise<{ success: boolean; message: string }> {
-    const conv = this.localConversations.find(c => c.id === id);
+    if (!this.currentUser) {
+      const stored = localStorage.getItem('auth_user');
+      if (stored) {
+        try {
+          this.currentUser = JSON.parse(stored);
+        } catch {}
+      }
+    }
+
+    const conv = this.localConversations.find(c => c.id === id || (id.includes('wait_1') && c.id === 'conv_1'));
     if (conv && this.currentUser) {
+      const now = new Date().toISOString();
       conv.assigned_user_id = this.currentUser.id;
       conv.assigned_user = this.currentUser;
       conv.status = 'OPEN';
-      conv.updated_at = new Date().toISOString();
+      conv.updated_at = now;
+      conv.last_message_at = now;
     }
 
     if (this.isFallbackMode) {
@@ -304,8 +459,11 @@ class ApiService {
       return await this.request<{ success: boolean; message: string }>(`/conversations/${id}/assign`, {
         method: 'POST',
       });
-    } catch {
-      return { success: true, message: 'Conversa atribuída com sucesso!' };
+    } catch (err: any) {
+      if (this.isFallbackMode) {
+        return { success: true, message: 'Conversa atribuída com sucesso!' };
+      }
+      throw err;
     }
   }
 
@@ -315,12 +473,26 @@ class ApiService {
     messageType: string = 'text',
     mediaUrl?: string
   ): Promise<{ message: Message }> {
+    if (!this.isFallbackMode) {
+      try {
+        const result = await this.request<{ message: Message }>(`/conversations/${conversationId}/messages`, {
+          method: 'POST',
+          body: JSON.stringify({ content, messageType, mediaUrl }),
+        });
+        return result;
+      } catch (err) {
+        console.warn('Backend send message failed, falling back to local store:', err);
+      }
+    }
+
     const newMsg: Message = {
       id: 'msg_' + Date.now(),
       organization_id: 'org_realizzetravel',
       conversation_id: conversationId,
       sender_type: 'AGENT',
       sender_id: this.currentUser?.id || 'usr_agent',
+      sender_name: this.currentUser?.name,
+      sender_avatar: this.currentUser?.avatar,
       message_type: (messageType as any) || 'text',
       content,
       media_url: mediaUrl,
@@ -331,7 +503,9 @@ class ApiService {
     if (!this.localMessages[conversationId]) {
       this.localMessages[conversationId] = [];
     }
-    this.localMessages[conversationId].push(newMsg);
+    if (!this.localMessages[conversationId].some(m => m.id === newMsg.id)) {
+      this.localMessages[conversationId].push(newMsg);
+    }
 
     const conv = this.localConversations.find(c => c.id === conversationId);
     if (conv) {
@@ -340,18 +514,7 @@ class ApiService {
       conv.updated_at = newMsg.created_at;
     }
 
-    if (this.isFallbackMode) {
-      return { message: newMsg };
-    }
-
-    try {
-      return await this.request<{ message: Message }>(`/conversations/${conversationId}/messages`, {
-        method: 'POST',
-        body: JSON.stringify({ content, messageType, mediaUrl }),
-      });
-    } catch {
-      return { message: newMsg };
-    }
+    return { message: newMsg };
   }
 
   public async transferConversation(
@@ -381,12 +544,20 @@ class ApiService {
     }
   }
 
-  public async closeConversation(conversationId: string): Promise<{ success: boolean; message: string }> {
+  public async closeConversation(
+    conversationId: string,
+    outcome?: 'WON' | 'LOST',
+    saleValue?: number,
+    lostReason?: string
+  ): Promise<{ success: boolean; message: string }> {
     const conv = this.localConversations.find(c => c.id === conversationId);
     if (conv) {
       conv.status = 'CLOSED';
       conv.closed_at = new Date().toISOString();
       conv.closed_by_user_id = this.currentUser?.id || null;
+      if (outcome) conv.sale_outcome = outcome;
+      if (saleValue !== undefined) conv.sale_value = saleValue;
+      if (lostReason) conv.lost_reason = lostReason;
     }
 
     if (this.isFallbackMode) {
@@ -396,9 +567,96 @@ class ApiService {
     try {
       return await this.request<{ success: boolean; message: string }>(`/conversations/${conversationId}/close`, {
         method: 'POST',
+        body: JSON.stringify({ outcome, saleValue, lostReason }),
       });
     } catch {
       return { success: true, message: 'Conversa finalizada com sucesso!' };
+    }
+  }
+
+  // WhatsApp Groups (accessed via main agency WhatsApp number)
+  public async getWhatsAppGroups(): Promise<{ groups: WhatsAppGroup[] }> {
+    if (this.isFallbackMode) {
+      return { groups: [...this.localWhatsAppGroups] };
+    }
+    try {
+      return await this.request<{ groups: WhatsAppGroup[] }>('/whatsapp/groups');
+    } catch {
+      return { groups: [...this.localWhatsAppGroups] };
+    }
+  }
+
+  public async sendWhatsAppGroupMessage(
+    groupId: string,
+    content: string
+  ): Promise<{ success: boolean; message: any }> {
+    const grp = this.localWhatsAppGroups.find(g => g.id === groupId);
+    const newMsg = {
+      id: 'gmsg_' + Date.now(),
+      group_id: groupId,
+      sender_name: this.currentUser?.name || 'Consultor RealizzeTravel',
+      content,
+      created_at: new Date().toISOString(),
+      is_from_agency: true,
+    };
+    if (grp) {
+      grp.last_message = content;
+      grp.last_message_at = newMsg.created_at;
+      if (!grp.messages) grp.messages = [];
+      grp.messages.push(newMsg);
+    }
+
+    if (this.isFallbackMode) {
+      return { success: true, message: newMsg };
+    }
+    try {
+      return await this.request<{ success: boolean; message: any }>(`/whatsapp/groups/${groupId}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ content }),
+      });
+    } catch {
+      return { success: true, message: newMsg };
+    }
+  }
+
+  // Update Customer Travel Parameters (automatic or manual)
+  public async updateCustomerTravelParams(
+    customerId: string,
+    params: {
+      destination_interest?: string;
+      travel_date?: string;
+      passenger_count?: number;
+      budget?: string;
+      auto_extracted?: boolean;
+    }
+  ): Promise<{ success: boolean; customer: Customer }> {
+    const cust = this.localCustomers.find(c => c.id === customerId);
+    if (cust) {
+      if (params.destination_interest !== undefined) cust.destination_interest = params.destination_interest;
+      if (params.travel_date !== undefined) cust.travel_date = params.travel_date;
+      if (params.passenger_count !== undefined) cust.passenger_count = params.passenger_count;
+      if (params.budget !== undefined) cust.budget = params.budget;
+      if (params.auto_extracted !== undefined) cust.auto_extracted = params.auto_extracted;
+      cust.updated_at = new Date().toISOString();
+
+      // Update in conversations where this customer appears
+      this.localConversations.forEach(cv => {
+        if (cv.customer_id === customerId) {
+          cv.customer = { ...cust };
+        }
+      });
+    }
+
+    if (this.isFallbackMode && cust) {
+      return { success: true, customer: cust };
+    }
+    try {
+      return await this.request<{ success: boolean; customer: Customer }>(`/customers/${customerId}/travel-params`, {
+        method: 'PUT',
+        body: JSON.stringify(params),
+      });
+    } catch {
+      return { success: true, customer: cust || ({} as Customer) };
     }
   }
 
@@ -526,121 +784,101 @@ class ApiService {
     }
   }
 
-  // Simulation Endpoint for testing WhatsApp messages
-  public async simulateWhatsAppMessage(data: { name: string; phone?: string; message: string }): Promise<{ success: boolean }> {
-    const phone = data.phone || '+55 11 9' + Math.floor(10000000 + Math.random() * 90000000);
-    const newCust: Customer = {
-      id: 'cst_' + Date.now(),
-      organization_id: 'org_realizzetravel',
-      name: data.name,
-      phone,
-      notes: 'Cliente que enviou mensagem de teste no WhatsApp',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    this.localCustomers.unshift(newCust);
-
-    const newConv: Conversation = {
-      id: 'conv_' + Date.now(),
-      organization_id: 'org_realizzetravel',
-      customer_id: newCust.id,
-      assigned_user_id: null,
-      status: 'WAITING',
-      priority: 'MEDIUM',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      closed_at: null,
-      closed_by_user_id: null,
-      last_message_at: new Date().toISOString(),
-      customer: newCust,
-      assigned_user: null,
-      unread_count: 1,
-      last_message: {
-        id: 'msg_' + Date.now(),
-        organization_id: 'org_realizzetravel',
-        conversation_id: 'conv_' + Date.now(),
-        sender_type: 'CUSTOMER',
-        sender_id: newCust.id,
-        message_type: 'text',
-        content: data.message,
-        status: 'read',
-        created_at: new Date().toISOString(),
-      },
-    };
-    this.localConversations.unshift(newConv);
-
-    this.localMessages[newConv.id] = [
-      {
-        id: 'msg_' + Date.now(),
-        organization_id: 'org_realizzetravel',
-        conversation_id: newConv.id,
-        sender_type: 'CUSTOMER',
-        sender_id: newCust.id,
-        message_type: 'text',
-        content: data.message,
-        status: 'read',
-        created_at: new Date().toISOString(),
-      }
-    ];
-
-    if (this.isFallbackMode) {
-      return { success: true };
-    }
-
-    try {
-      return await this.request('/webhooks/simulate-inbound', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
-    } catch {
-      return { success: true };
-    }
+  // Clear all mock/fake conversations, messages and customers
+  public async clearMockData(): Promise<{ success: boolean; message: string }> {
+    this.localConversations = [];
+    this.localCustomers = [];
+    this.localMessages = {};
+    return await this.request('/settings/whatsapp/clear-history', {
+      method: 'POST',
+    });
   }
 
-  // Settings Endpoints
-  public async getWhatsAppSettings(): Promise<{ config: {
-    phoneNumberId: string;
-    businessAccountId: string;
-    accessToken: string;
-    verifyToken: string;
-    status: string;
-  } }> {
-    const defaultConfig = {
-      phoneNumberId: '109823485728492',
-      businessAccountId: '298374829103948',
-      accessToken: 'EAAG9...kL293',
-      verifyToken: 'realizzetravel_secret_token_2026',
-      status: 'connected',
-    };
 
-    if (this.isFallbackMode) {
-      return { config: defaultConfig };
-    }
+  // Settings Endpoints
+  public async getWhatsAppSettings(): Promise<{ config: WhatsAppConfig }> {
+    const defaultConfig: WhatsAppConfig = {
+      providerType: 'QR_CODE',
+      phoneNumberId: '',
+      businessAccountId: '',
+      accessToken: '',
+      verifyToken: 'viagens_whatsapp_verify_token_2026',
+      instanceName: 'realizze-travel',
+      gatewayUrl: '',
+      apiKey: '',
+      qrCodeBase64: null,
+      phoneConnected: null,
+      batteryLevel: null,
+      status: 'DISCONNECTED',
+    };
 
     try {
       return await this.request('/settings/whatsapp');
     } catch {
+      const stored = localStorage.getItem('realizze_wa_config');
+      if (stored) {
+        try {
+          return { config: JSON.parse(stored) };
+        } catch {}
+      }
       return { config: defaultConfig };
     }
   }
 
-  public async saveWhatsAppSettings(data: {
-    phoneNumberId: string;
-    businessAccountId: string;
-    accessToken: string;
-    verifyToken: string;
-  }): Promise<{ success: boolean; message: string }> {
-    if (this.isFallbackMode) {
-      return { success: true, message: 'Configurações do WhatsApp salvas com sucesso!' };
-    }
+  public async saveWhatsAppSettings(data: Partial<WhatsAppConfig>): Promise<{ success: boolean; message: string; config?: WhatsAppConfig }> {
     try {
-      return await this.request('/settings/whatsapp', {
+      const res = await this.request<{ success: boolean; message: string; config?: WhatsAppConfig }>('/settings/whatsapp', {
         method: 'PUT',
         body: JSON.stringify(data),
       });
+      if (data) {
+        localStorage.setItem('realizze_wa_config', JSON.stringify(data));
+      }
+      return res;
     } catch {
+      if (data) {
+        localStorage.setItem('realizze_wa_config', JSON.stringify(data));
+      }
       return { success: true, message: 'Configurações do WhatsApp salvas com sucesso!' };
     }
+  }
+
+  public async generateWhatsAppQr(params: {
+    gatewayUrl?: string;
+    instanceName?: string;
+    apiKey?: string;
+    zapiInstanceId?: string;
+    zapiToken?: string;
+    zapiClientToken?: string;
+  }): Promise<{ success: boolean; qrCode: string; status: string; message: string }> {
+    return await this.request('/settings/whatsapp/qr/generate', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  public async confirmWhatsAppPairing(phone?: string): Promise<{ success: boolean; message: string }> {
+    return await this.request('/settings/whatsapp/qr/pair-success', {
+      method: 'POST',
+      body: JSON.stringify({ phone }),
+    });
+  }
+
+  public async simulateWhatsAppIncomingMessage(params: {
+    phone: string;
+    name: string;
+    content: string;
+  }): Promise<{ success: boolean; message: string; conversationId?: string; autoReplySent?: string }> {
+    return await this.request('/settings/whatsapp/simulate-incoming', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  public async disconnectWhatsApp(): Promise<{ success: boolean; message: string }> {
+    return await this.request('/settings/whatsapp/disconnect', {
+      method: 'POST',
+    });
   }
 
   public async getGeneralSettings(): Promise<{ settings: {
@@ -651,19 +889,29 @@ class ApiService {
     outOfHoursMessage: string;
     businessHoursStart: string;
     businessHoursEnd: string;
+    weekdayHoursStart?: string;
+    weekdayHoursEnd?: string;
+    saturdayHoursStart?: string;
+    saturdayHoursEnd?: string;
+    sundayClosed?: boolean;
     businessDays: string[];
     queueMode: 'MANUAL' | 'AUTO_ROUND_ROBIN';
     soundAlertsEnabled: boolean;
     desktopNotificationsEnabled: boolean;
   } }> {
     const defaultSettings = {
-      agencyName: 'RealizzeTravel Viagens & Turismo',
-      agencyPhone: '+55 11 3840-2026',
-      agencyEmail: 'atendimento@realizzetravel.com.br',
-      welcomeMessage: 'Olá! Bem-vindo(a) à RealizzeTravel Viagens. Em instantes um de nossos consultores de viagens irá atendê-lo(a).',
-      outOfHoursMessage: 'Nosso horário de atendimento é de Segunda a Sexta das 08h às 19h e Sábados das 09h às 14h. Deixe sua mensagem que responderemos assim que abrirmos!',
+      agencyName: 'RealizzeTravel',
+      agencyPhone: '(81) 99535-7254',
+      agencyEmail: 'realizzetravel@gmail.com',
+      welcomeMessage: 'Olá! Bem-vindo(a) à RealizzeTravel. Em instantes um de nossos consultores de viagens irá atendê-lo(a).',
+      outOfHoursMessage: 'Nosso horário de atendimento é de Segunda a Sexta das 08h às 19h e Sábados das 08h30 às 13h30. Deixe sua mensagem que responderemos assim que abrirmos!',
       businessHoursStart: '08:00',
       businessHoursEnd: '19:00',
+      weekdayHoursStart: '08:00',
+      weekdayHoursEnd: '19:00',
+      saturdayHoursStart: '08:30',
+      saturdayHoursEnd: '13:30',
+      sundayClosed: true,
       businessDays: ['1', '2', '3', '4', '5', '6'],
       queueMode: 'MANUAL' as const,
       soundAlertsEnabled: true,
@@ -704,6 +952,17 @@ class ApiService {
     if (this.currentUser) {
       if (data.name) this.currentUser.name = data.name;
       if (data.avatar) this.currentUser.avatar = data.avatar;
+      try {
+        localStorage.setItem('auth_user', JSON.stringify(this.currentUser));
+      } catch {}
+
+      // Update in stored users array as well
+      const list = loadStoredUsers();
+      const idx = list.findIndex((u) => u.id === this.currentUser!.id);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], ...this.currentUser };
+        saveStoredUsers(list);
+      }
     }
 
     if (this.isFallbackMode && this.currentUser) {
@@ -711,10 +970,17 @@ class ApiService {
     }
 
     try {
-      return await this.request('/users/profile/me', {
+      const res = await this.request<{ success: boolean; message: string; user: User }>('/users/profile/me', {
         method: 'PUT',
         body: JSON.stringify(data),
       });
+      if (res.user) {
+        this.currentUser = res.user;
+        try {
+          localStorage.setItem('auth_user', JSON.stringify(res.user));
+        } catch {}
+      }
+      return res;
     } catch {
       return { success: true, message: 'Perfil atualizado com sucesso!', user: this.currentUser! };
     }

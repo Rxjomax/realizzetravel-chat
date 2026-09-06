@@ -3,6 +3,7 @@ export type UserStatus = 'ONLINE' | 'BUSY' | 'OFFLINE';
 
 export type ConversationStatus = 'WAITING' | 'ASSIGNED' | 'OPEN' | 'CLOSED' | 'TRANSFERRED';
 export type Priority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+export type SaleOutcome = 'WON' | 'LOST';
 
 export type SenderType = 'CUSTOMER' | 'AGENT' | 'SYSTEM';
 export type MessageType = 'text' | 'image' | 'video' | 'audio' | 'document';
@@ -32,6 +33,7 @@ export interface Customer {
   travel_date?: string;
   passenger_count?: number;
   budget?: string;
+  auto_extracted?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -48,11 +50,37 @@ export interface Conversation {
   closed_at?: string | null;
   closed_by_user_id?: string | null;
   last_message_at: string;
+  sale_outcome?: SaleOutcome | null;
+  sale_value?: number | null;
+  lost_reason?: string | null;
+  auto_requeued_inactivity?: boolean;
   // Joined relation fields for UI
   customer?: Customer;
   assigned_user?: User | null;
   unread_count?: number;
   last_message?: Message;
+}
+
+export interface WhatsAppGroupMessage {
+  id: string;
+  group_id: string;
+  sender_name: string;
+  sender_phone?: string;
+  content: string;
+  created_at: string;
+  is_from_agency: boolean;
+  media_url?: string;
+}
+
+export interface WhatsAppGroup {
+  id: string;
+  name: string;
+  description: string;
+  participant_count: number;
+  avatar?: string;
+  last_message?: string;
+  last_message_at: string;
+  messages?: WhatsAppGroupMessage[];
 }
 
 export interface Message {
@@ -61,6 +89,8 @@ export interface Message {
   conversation_id: string;
   sender_type: SenderType;
   sender_id: string;
+  sender_name?: string;
+  sender_avatar?: string;
   message_type: MessageType;
   content: string;
   media_url?: string | null;
@@ -98,12 +128,27 @@ export interface AuditLog {
   user_name?: string;
 }
 
+export type WhatsAppProviderType = 'META_CLOUD' | 'QR_CODE' | 'Z_API';
+
 export interface WhatsAppConfig {
-  phoneNumberId: string;
-  businessAccountId: string;
-  accessToken: string;
-  verifyToken: string;
-  status: 'CONNECTED' | 'DISCONNECTED';
+  providerType?: WhatsAppProviderType;
+  // Meta Cloud API
+  phoneNumberId?: string;
+  businessAccountId?: string;
+  accessToken?: string;
+  verifyToken?: string;
+  // QR Code / Web Gateway (Evolution API, Z-API, Baileys)
+  instanceName?: string;
+  gatewayUrl?: string;
+  apiKey?: string;
+  // Z-API Native
+  zapiInstanceId?: string;
+  zapiToken?: string;
+  zapiClientToken?: string;
+  qrCodeBase64?: string | null;
+  phoneConnected?: string | null;
+  batteryLevel?: number | null;
+  status: 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING' | 'QR_READY';
 }
 
 export interface AuthResponse {

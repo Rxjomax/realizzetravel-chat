@@ -78,8 +78,8 @@ usersRouter.put('/:id/status', authenticateToken, (req: AuthenticatedRequest, re
   }
 });
 
-// POST /api/users - Create new attendant (Admin only)
-usersRouter.post('/', authenticateToken, requireRole(['ADMIN']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+// POST /api/users - Create new attendant (Admin or Supervisor)
+usersRouter.post('/', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { name, email, password, role, avatar } = req.body;
 
@@ -204,28 +204,128 @@ usersRouter.put('/profile/me', authenticateToken, async (req: AuthenticatedReque
   }
 });
 
-usersRouter.put('/:id', authenticateToken, requireRole(['ADMIN']), (req: AuthenticatedRequest, res: Response): void => {
+usersRouter.put('/:id', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { name, email, role, avatar } = req.body;
+    const { name, email, role, avatar, status, password } = req.body;
     const targetUserId = req.params.id;
+    const currentUserId = req.user!.id;
+    const currentUserRole = req.user!.role;
 
-    const user = dbGet('SELECT id FROM users WHERE id = ?', [targetUserId]);
+    // Allow Admin, Supervisor, or the user editing themselves
+    if (currentUserRole !== 'ADMIN' && currentUserRole !== 'SUPERVISOR' && currentUserId !== targetUserId) {
+      res.status(403).json({ error: 'Permissão negada para atualizar este usuário.' });
+      return;
+    }
+
+    const user = dbGet<any>('SELECT id, role FROM users WHERE id = ?', [targetUserId]);
     if (!user) {
       res.status(404).json({ error: 'Usuário não encontrado.' });
       return;
     }
 
+    // Only Admin can change roles to ADMIN
+    const finalRole = (role && (currentUserRole === 'ADMIN' || (currentUserRole === 'SUPERVISOR' && role !== 'ADMIN')))
+      ? role
+      : undefined;
+
     const now = new Date().toISOString();
+    let newPasswordHash: string | null = null;
+    if (password && typeof password === 'string' && password.trim().length >= 6) {
+      newPasswordHash = await bcrypt.hash(password.trim(), 10);
+    }
+
     dbRun(
-      'UPDATE users SET name = COALESCE(?, name), email = COALESCE(?, email), role = COALESCE(?, role), avatar = COALESCE(?, avatar), updated_at = ? WHERE id = ?',
-      [name?.trim() || null, email?.toLowerCase().trim() || null, role || null, avatar || null, now, targetUserId]
+      `UPDATE users 
+       SET name = COALESCE(?, name), 
+           email = COALESCE(?, email), 
+           role = COALESCE(?, role), 
+           avatar = COALESCE(?, avatar), 
+           status = COALESCE(?, status),
+           password_hash = COALESCE(?, password_hash),
+           updated_at = ? 
+       WHERE id = ?`,
+      [
+        name?.trim() || null, 
+        email?.toLowerCase().trim() || null, 
+        finalRole || null, 
+        avatar !== undefined ? avatar : null,
+        status || null,
+        newPasswordHash,
+        now, 
+        targetUserId
+      ]
     );
 
     broadcastAttendantsList();
 
-    res.json({ success: true, message: 'Usuário atualizado com sucesso.' });
+    const updated = dbGet<any>(
+      'SELECT id, organization_id, name, email, role, status, avatar, created_at, updated_at FROM users WHERE id = ?',
+      [targetUserId]
+    );
+
+    res.json({ success: true, message: 'Perfil atualizado com sucesso.', user: updated });
   } catch (error) {
     console.error('Error updating user:', error);
     res.status(500).json({ error: 'Erro ao atualizar dados do usuário.' });
+  }
+});
+
+// DELETE /api/users/:id - Delete an attendant (Admin or Supervisor)
+usersRouter.delete('/:id', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR']), (req: AuthenticatedRequest, res: Response): void => {
+  try {
+    const targetUserId = req.params.id;
+    if (req.user!.id === targetUserId) {
+      res.status(400).json({ error: 'Você não pode excluir o seu próprio usuário logado.' });
+      return;
+    }
+
+    const targetUser = dbGet<any>('SELECT id, name, role FROM users WHERE id = ?', [targetUserId]);
+    if (!targetUser) {
+      res.status(404).json({ error: 'Atendente não encontrado ou já excluído.' });
+      return;
+    }
+
+    if (req.user!.role === 'SUPERVISOR' && (targetUser.role === 'ADMIN' || targetUser.role === 'SUPERVISOR')) {
+      res.status(403).json({ error: 'Supervisores só podem excluir perfis de consultores operacionais.' });
+      return;
+    }
+
+    const orgId = req.user!.organization_id;
+
+    // Safely unlink foreign key references
+    try {
+      dbRun('UPDATE conversations SET assigned_user_id = NULL WHERE assigned_user_id = ?', [targetUserId]);
+      dbRun('UPDATE conversations SET closed_by_user_id = NULL WHERE closed_by_user_id = ?', [targetUserId]);
+      dbRun('UPDATE conversation_events SET user_id = NULL WHERE user_id = ?', [targetUserId]);
+      dbRun('UPDATE audit_logs SET user_id = NULL WHERE user_id = ?', [targetUserId]);
+    } catch (e) {
+      console.warn('Notice unlinking user relations:', e);
+    }
+
+    // Delete user from SQLite
+    dbRun('DELETE FROM users WHERE id = ?', [targetUserId]);
+
+    // Record audit log
+    const now = new Date().toISOString();
+    try {
+      dbRun(
+        'INSERT INTO audit_logs (id, organization_id, user_id, action, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          `log_del_usr_${Date.now()}`,
+          orgId,
+          req.user!.id,
+          'USER_DELETED',
+          JSON.stringify({ deletedUserId: targetUserId, name: targetUser.name, role: targetUser.role }),
+          now,
+        ]
+      );
+    } catch {}
+
+    broadcastAttendantsList();
+
+    res.json({ success: true, message: `Perfil "${targetUser.name}" excluído com sucesso.` });
+  } catch (error: any) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({ error: error?.message || 'Erro ao remover atendente.' });
   }
 });

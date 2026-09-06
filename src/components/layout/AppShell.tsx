@@ -3,6 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { UserStatus } from '../../types';
 import { socketClient } from '../../services/socket';
 import { api } from '../../services/api';
+import { RealizzeLogo } from '../common/RealizzeLogo';
 import {
   isSoundEnabled,
   setSoundEnabled,
@@ -89,7 +90,7 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [soundActive, setSoundActive] = useState<boolean>(true);
   const [activeNotifFilter, setActiveNotifFilter] = useState<'all' | 'unread'>('all');
-  const [agencyName, setAgencyName] = useState<string>('RealizzeTravel Viagens');
+  const [agencyName, setAgencyName] = useState<string>('RealizzeTravel');
 
   const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
     if (typeof window !== 'undefined') {
@@ -108,6 +109,13 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
   const isAdmin = user?.role === 'ADMIN';
   const isSupervisor = user?.role === 'SUPERVISOR';
   const canAccessAdmin = isAdmin || isSupervisor;
+
+  // Protect restricted tabs if agent tries to access them
+  useEffect(() => {
+    if (!canAccessAdmin && (currentTab === 'customers' || currentTab === 'reports' || currentTab === 'agents' || currentTab === 'whatsapp' || currentTab === 'settings')) {
+      onTabChange('chat');
+    }
+  }, [canAccessAdmin, currentTab, onTabChange]);
 
   // Persist notifications
   useEffect(() => {
@@ -179,7 +187,7 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
     const unbindCreated = socketClient.on('conversation:created', (payload) => {
       playNotificationSound('new_ticket');
       const newNotif: NotificationItem = {
-        id: `notif_${Date.now()}`,
+        id: `notif_${Date.now()}_${Math.random().toString(36).substring(7)}`,
         type: 'NEW_TICKET',
         title: 'Novo Cliente na Fila',
         message: `${payload.customerName || 'Cliente'} enviou mensagem no WhatsApp: "${payload.content || 'Solicitação de cotação'}"`,
@@ -194,7 +202,7 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
       setShowNotificationToast(true);
       setTimeout(() => setShowNotificationToast(false), 5000);
 
-      sendDesktopNotification(`${agencyName || 'RealizzeTravel Viagens'} - Novo Atendimento`, {
+      sendDesktopNotification(`${agencyName || 'RealizzeTravel'} - Novo Atendimento`, {
         body: `${payload.customerName || 'Cliente'} está aguardando no WhatsApp.`,
         onClick: () => onTabChange('chat'),
       });
@@ -204,7 +212,7 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
       if (payload.message && payload.message.sender_type === 'CUSTOMER') {
         playNotificationSound('message');
         const newNotif: NotificationItem = {
-          id: `notif_${Date.now()}`,
+          id: `notif_${Date.now()}_${Math.random().toString(36).substring(7)}`,
           type: 'NEW_MESSAGE',
           title: 'Mensagem Recebida',
           message: payload.message.content || 'Nova mensagem de passageiro.',
@@ -218,7 +226,7 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
         setShowNotificationToast(true);
         setTimeout(() => setShowNotificationToast(false), 4000);
 
-        sendDesktopNotification(`${agencyName || 'RealizzeTravel Viagens'} - Mensagem Recebida`, {
+        sendDesktopNotification(`${agencyName || 'RealizzeTravel'} - Mensagem Recebida`, {
           body: payload.message.content,
           onClick: () => onTabChange('chat'),
         });
@@ -236,7 +244,7 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
     const unbindTransferred = socketClient.on('conversation:transferred', (payload) => {
       playNotificationSound('message');
       const newNotif: NotificationItem = {
-        id: `notif_${Date.now()}`,
+        id: `notif_${Date.now()}_${Math.random().toString(36).substring(7)}`,
         type: 'TRANSFERRED',
         title: 'Atendimento Transferido',
         message: `Uma conversa foi transferida para você: ${payload.reason || 'Atendimento de cotação'}`,
@@ -250,11 +258,16 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
       setTimeout(() => setShowNotificationToast(false), 5000);
     });
 
+    const unbindCleared = socketClient.on('conversation:cleared', () => {
+      setNotifications([]);
+    });
+
     return () => {
       unbindCreated();
       unbindNewMessage();
       unbindAssigned();
       unbindTransferred();
+      unbindCleared();
     };
   }, [user?.id, onTabChange]);
 
@@ -303,9 +316,10 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, public: true },
     { id: 'chat', label: 'Atendimentos', icon: MessageSquare, public: true, badge: 'Fila' },
-    { id: 'customers', label: 'Clientes', icon: Users, public: true },
-    { id: 'reports', label: 'Relatórios', icon: BarChart3, public: true },
-    { id: 'agents', label: 'Atendentes', icon: UserCog, adminOnly: true },
+    { id: 'groups', label: 'Grupos WPP', icon: MessageCircle, public: true, badge: 'Grupos' },
+    { id: 'customers', label: 'Clientes', icon: Users, adminOnly: true },
+    { id: 'reports', label: 'Relatórios', icon: BarChart3, adminOnly: true },
+    { id: 'agents', label: 'Consultores', icon: UserCog, adminOnly: true },
     { id: 'whatsapp', label: 'WhatsApp', icon: Smartphone, adminOnly: true },
     { id: 'settings', label: 'Configurações', icon: Settings, adminOnly: true },
   ];
@@ -349,7 +363,7 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] text-slate-800 flex flex-col font-sans antialiased">
+    <div className="h-screen max-h-screen overflow-hidden bg-[#F8FAFC] text-slate-800 flex flex-col font-sans antialiased">
       {/* Realtime Floating Toast */}
       {showNotificationToast && (
         <div
@@ -391,12 +405,10 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
 
           {/* Agency Logo */}
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-xs font-bold text-base">
-              <Plane className="w-5 h-5 text-white" />
-            </div>
+            <RealizzeLogo size={38} className="shadow-xs rounded-xl shrink-0" />
             <div>
-              <div className="font-bold text-base text-slate-900 tracking-tight leading-tight flex items-center gap-2">
-                {agencyName || 'RealizzeTravel Viagens'}
+              <div className="font-extrabold text-base text-slate-900 tracking-tight leading-tight flex items-center gap-2">
+                <span>{agencyName || 'RealizzeTravel'}</span>
                 <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full text-[10px] font-bold">
                   WhatsApp Oficial
                 </span>
@@ -573,10 +585,10 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
                       <p className="text-[11px] text-slate-400">Nenhuma notificação encontrada nesta categoria.</p>
                     </div>
                   ) : (
-                    filteredNotifications.map((notif) => {
+                    filteredNotifications.map((notif, idx) => {
                       return (
                         <div
-                          key={notif.id}
+                          key={notif.id ? `notif_${notif.id}` : `notif_idx_${idx}`}
                           onClick={() => handleNotificationClick(notif)}
                           className={`p-3.5 flex items-start gap-3 hover:bg-slate-50 cursor-pointer transition-colors ${
                             !notif.read ? 'bg-blue-50/40' : 'bg-white'
@@ -688,7 +700,7 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
 
       <div className="flex flex-1 overflow-hidden">
         {/* SIDEBAR (Desktop) */}
-        <aside className="hidden md:flex flex-col w-60 bg-white border-r border-slate-200 p-3.5 shrink-0 shadow-2xs">
+        <aside className="hidden md:flex flex-col w-60 bg-white border-r border-slate-200 p-3.5 shrink-0 shadow-2xs h-full overflow-y-auto">
           <nav className="space-y-1">
             {filteredNavItems.map((item) => {
               const Icon = item.icon;
@@ -774,7 +786,7 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
         )}
 
         {/* MAIN VIEW CONTENT */}
-        <main className="flex-1 overflow-y-auto bg-[#F8FAFC] flex flex-col">
+        <main className={`flex-1 min-h-0 bg-[#F8FAFC] flex flex-col ${currentTab === 'chat' ? 'overflow-hidden h-full' : 'overflow-y-auto'}`}>
           {children}
         </main>
       </div>

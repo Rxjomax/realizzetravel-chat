@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../../services/api';
 import { Customer } from '../../types';
-import { Search, MapPin, Calendar, DollarSign, Phone, Mail, Users, MessageSquare } from 'lucide-react';
+import { Search, MapPin, Calendar, DollarSign, Phone, Mail, Users, MessageSquare, TrendingUp, Wallet, UserCheck } from 'lucide-react';
+import { parseBudgetValue } from '../../utils/travelExtractor';
 
 interface CustomersViewProps {
   onSelectCustomerChat?: (customerId: string) => void;
@@ -27,6 +28,30 @@ export const CustomersView: React.FC<CustomersViewProps> = () => {
     fetchCustomers();
   }, [search]);
 
+  // Totalização do valor estimado dos clientes
+  const { totalEstimatedValue, customersWithBudget, totalPassengers, averageBudget } = useMemo(() => {
+    let total = 0;
+    let countWithBudget = 0;
+    let totalPax = 0;
+
+    customers.forEach((c) => {
+      totalPax += c.passenger_count || 1;
+      const val = parseBudgetValue(c.budget);
+      if (val > 0) {
+        total += val;
+        countWithBudget += 1;
+      }
+    });
+
+    const avg = countWithBudget > 0 ? total / countWithBudget : 0;
+    return {
+      totalEstimatedValue: total,
+      customersWithBudget: countWithBudget,
+      totalPassengers: totalPax,
+      averageBudget: avg,
+    };
+  }, [customers]);
+
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-7xl mx-auto w-full">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -49,6 +74,77 @@ export const CustomersView: React.FC<CustomersViewProps> = () => {
             onChange={(e) => setSearch(e.target.value)}
             className="w-full bg-white border border-slate-200 rounded-lg pl-9 pr-4 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 shadow-xs"
           />
+        </div>
+      </div>
+
+      {/* Cards de Totalização dos Valores Estimados */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white border border-emerald-200 rounded-xl p-4 shadow-xs flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 shrink-0">
+            <Wallet className="w-6 h-6" />
+          </div>
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">
+              Total em Orçamentos Estimados
+            </span>
+            <div className="text-lg font-extrabold text-slate-900 mt-0.5">
+              R$ {totalEstimatedValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <span className="text-[10px] text-slate-400">
+              {customersWithBudget} cliente(s) com valor cotado
+            </span>
+          </div>
+        </div>
+
+        <div className="bg-white border border-blue-200 rounded-xl p-4 shadow-xs flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
+            <UserCheck className="w-6 h-6" />
+          </div>
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-blue-700">
+              Total de Clientes
+            </span>
+            <div className="text-lg font-extrabold text-slate-900 mt-0.5">
+              {customers.length} cadastrados
+            </div>
+            <span className="text-[10px] text-slate-400">
+              Contatos capturados no atendimento
+            </span>
+          </div>
+        </div>
+
+        <div className="bg-white border border-indigo-200 rounded-xl p-4 shadow-xs flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
+            <TrendingUp className="w-6 h-6" />
+          </div>
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700">
+              Ticket Médio Estimado
+            </span>
+            <div className="text-lg font-extrabold text-slate-900 mt-0.5">
+              R$ {averageBudget.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <span className="text-[10px] text-slate-400">
+              Média por pacote cotado
+            </span>
+          </div>
+        </div>
+
+        <div className="bg-white border border-amber-200 rounded-xl p-4 shadow-xs flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600 shrink-0">
+            <Users className="w-6 h-6" />
+          </div>
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+              Passageiros Previstos
+            </span>
+            <div className="text-lg font-extrabold text-slate-900 mt-0.5">
+              {totalPassengers} pessoas
+            </div>
+            <span className="text-[10px] text-slate-400">
+              Em cotações abertas e fechadas
+            </span>
+          </div>
         </div>
       </div>
 

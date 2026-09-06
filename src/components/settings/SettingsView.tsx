@@ -15,9 +15,12 @@ import {
   Save,
   Radio,
   Sliders,
-  Sparkles,
-  Play,
+  Trash2,
   ArrowRight,
+  Camera,
+  Upload,
+  Check,
+  Sparkles,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { User } from '../../types';
@@ -48,27 +51,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [activeTab, setActiveTab] = useState<'general' | 'notifications' | 'profile' | 'whatsapp'>(initialTab);
 
   // General Settings State
-  const [agencyName, setAgencyName] = useState('RealizzeTravel Viagens & Turismo');
-  const [agencyPhone, setAgencyPhone] = useState('+55 (11) 4004-9800');
-  const [agencyEmail, setAgencyEmail] = useState('contato@realizzetravel.com.br');
+  const [agencyName, setAgencyName] = useState('RealizzeTravel');
+  const [agencyPhone, setAgencyPhone] = useState('(81) 99535-7254');
+  const [agencyEmail, setAgencyEmail] = useState('realizzetravel@gmail.com');
   const [welcomeMessage, setWelcomeMessage] = useState(
-    'Olá! Seja bem-vindo à RealizzeTravel Viagens. Como podemos ajudar no seu roteiro hoje? Em instantes um de nossos consultores de turismo irá lhe atender.'
+    'Olá! Seja bem-vindo à RealizzeTravel. Como podemos ajudar no seu roteiro hoje? Em instantes um de nossos consultores irá lhe atender.'
   );
   const [outOfHoursMessage, setOutOfHoursMessage] = useState(
-    'Nosso horário de atendimento é de Segunda a Sexta das 08h às 19h e Sábados das 09h às 13h. Sua solicitação foi registrada com sucesso e retornaremos no início do próximo expediente!'
+    'Nosso horário de atendimento é de Segunda a Sexta das 08h às 19h e Sábados das 08h30 às 13h30. Sua solicitação foi registrada com sucesso e retornaremos no início do próximo expediente!'
   );
   const [businessHoursStart, setBusinessHoursStart] = useState('08:00');
   const [businessHoursEnd, setBusinessHoursEnd] = useState('19:00');
+  const [weekdayHoursStart, setWeekdayHoursStart] = useState('08:00');
+  const [weekdayHoursEnd, setWeekdayHoursEnd] = useState('19:00');
+  const [saturdayHoursStart, setSaturdayHoursStart] = useState('08:30');
+  const [saturdayHoursEnd, setSaturdayHoursEnd] = useState('13:30');
   const [businessDays, setBusinessDays] = useState<string[]>(['seg', 'ter', 'qua', 'qui', 'sex', 'sab']);
   const [queueMode, setQueueMode] = useState<'MANUAL' | 'AUTO_ROUND_ROBIN'>('MANUAL');
 
-  // Test Simulation State
+  // Mock Data Cleanup State
   const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{
-    queueInfo: string;
-    autoReplyInfo: string;
-    status: string;
-  } | null>(null);
 
   // Notification State
   const [soundActive, setSoundActive] = useState(true);
@@ -80,6 +82,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const profileFileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleProfilePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showFeedback('Por favor selecione um arquivo de imagem válido (PNG, JPG, WEBP).', true);
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      showFeedback('A imagem deve ter no máximo 4MB.', true);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setProfileAvatar(ev.target?.result as string);
+      showFeedback('Foto carregada com sucesso! Clique em "Salvar Alterações de Perfil" para salvar.');
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Status and Loading
   const [isLoading, setIsLoading] = useState(true);
@@ -94,13 +116,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         setIsLoading(true);
         const res = await api.getGeneralSettings();
         if (res.settings) {
-          setAgencyName((res.settings.agencyName || 'RealizzeTravel Viagens & Turismo').replace(/VooLivre/g, 'RealizzeTravel'));
-          setAgencyPhone(res.settings.agencyPhone || '+55 (11) 4004-9800');
-          setAgencyEmail((res.settings.agencyEmail || 'contato@realizzetravel.com.br').replace(/@voolivre/g, '@realizzetravel').replace(/voolivre/g, 'realizzetravel'));
+          setAgencyName((res.settings.agencyName || 'RealizzeTravel').replace(/VooLivre/g, 'RealizzeTravel').replace(/RealizzeTravel Viagens & Turismo/g, 'RealizzeTravel').replace(/Realizze Travel/g, 'RealizzeTravel'));
+          setAgencyPhone(res.settings.agencyPhone || '(81) 99535-7254');
+          setAgencyEmail((res.settings.agencyEmail || 'realizzetravel@gmail.com').replace(/@voolivre/g, '@realizzetravel').replace(/voolivre/g, 'realizzetravel'));
           setWelcomeMessage((res.settings.welcomeMessage || '').replace(/VooLivre/g, 'RealizzeTravel'));
           setOutOfHoursMessage(res.settings.outOfHoursMessage || '');
           setBusinessHoursStart(res.settings.businessHoursStart || '08:00');
           setBusinessHoursEnd(res.settings.businessHoursEnd || '19:00');
+          setWeekdayHoursStart(res.settings.weekdayHoursStart || res.settings.businessHoursStart || '08:00');
+          setWeekdayHoursEnd(res.settings.weekdayHoursEnd || res.settings.businessHoursEnd || '19:00');
+          setSaturdayHoursStart(res.settings.saturdayHoursStart || '08:30');
+          setSaturdayHoursEnd(res.settings.saturdayHoursEnd || '13:30');
           setBusinessDays(res.settings.businessDays || ['seg', 'ter', 'qua', 'qui', 'sex', 'sab']);
           setQueueMode(res.settings.queueMode || 'MANUAL');
         }
@@ -142,8 +168,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         agencyEmail,
         welcomeMessage,
         outOfHoursMessage,
-        businessHoursStart,
-        businessHoursEnd,
+        businessHoursStart: weekdayHoursStart,
+        businessHoursEnd: weekdayHoursEnd,
+        weekdayHoursStart,
+        weekdayHoursEnd,
+        saturdayHoursStart,
+        saturdayHoursEnd,
         businessDays,
         queueMode,
       });
@@ -151,7 +181,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('agency_settings_updated', { detail: res.settings || { agencyName } }));
       }
-      showFeedback('Configurações gerais da agência salvas com sucesso!');
+      showFeedback('Configurações de atendimento e distribuição salvas com sucesso!');
     } catch (err: any) {
       showFeedback(err.message || 'Erro ao salvar configurações gerais.', true);
     } finally {
@@ -165,8 +195,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const dayMap = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'];
       const currentDay = dayMap[spDate.getDay()];
       if (!businessDays.includes(currentDay)) return false;
-      const [startH, startM] = (businessHoursStart || '08:00').split(':').map(Number);
-      const [endH, endM] = (businessHoursEnd || '19:00').split(':').map(Number);
+
+      let start = weekdayHoursStart || '08:00';
+      let end = weekdayHoursEnd || '19:00';
+
+      if (currentDay === 'sab') {
+        start = saturdayHoursStart || '08:30';
+        end = saturdayHoursEnd || '13:30';
+      }
+
+      const [startH, startM] = start.split(':').map(Number);
+      const [endH, endM] = end.split(':').map(Number);
       const currentMin = spDate.getHours() * 60 + spDate.getMinutes();
       const startMin = (isNaN(startH) ? 8 : startH) * 60 + (isNaN(startM) ? 0 : startM);
       const endMin = (isNaN(endH) ? 19 : endH) * 60 + (isNaN(endM) ? 0 : endM);
@@ -176,51 +215,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const handleTestAutomation = async () => {
+  const handleClearMockData = async () => {
+    if (!window.confirm('Tem certeza de que deseja limpar todas as conversas e mensagens fictícias? Essa ação deixará o painel 100% pronto para o número real da sua agência.')) {
+      return;
+    }
     try {
       setIsTesting(true);
-      setTestResult(null);
-
-      // Auto-save settings first so the test exercises the latest values
-      await api.saveGeneralSettings({
-        agencyName,
-        agencyPhone,
-        agencyEmail,
-        welcomeMessage,
-        outOfHoursMessage,
-        businessHoursStart,
-        businessHoursEnd,
-        businessDays,
-        queueMode,
-      });
-
-      const randomNames = ['Camila Barbosa', 'Rodrigo Duarte', 'Mariana Siqueira', 'Lucas Tavares'];
-      const testName = randomNames[Math.floor(Math.random() * randomNames.length)];
-      const testPhone = `+55 11 9${Math.floor(10000000 + Math.random() * 90000000)}`;
-      const testMsg = 'Olá, gostaria de fazer uma cotação para pacote em Porto de Galinhas!';
-
-      const res: any = await api.simulateWhatsAppMessage({
-        name: testName,
-        phone: testPhone,
-        message: testMsg,
-      });
-
-      const details = res?.details || {};
-      const isOpen = isCurrentlyOpen();
-
-      setTestResult({
-        queueInfo: details.status === 'ASSIGNED'
-          ? 'Distribuído automaticamente via Rodízio (Atendente Online)'
-          : 'Fila Manual (Aguardando atendente assumir)',
-        autoReplyInfo: details.autoReplySent
-          ? (isOpen ? 'Boas-Vindas enviada automaticamente' : 'Aviso de Fora do Horário enviado')
-          : 'Sem envio automático configurado',
-        status: details.status || 'WAITING',
-      });
-
-      showFeedback('Simulação realizada! Mensagem recebida e automações acionadas com sucesso.');
+      const res = await api.clearMockData();
+      showFeedback(res.message || 'Histórico fictício limpo com sucesso!');
     } catch (err: any) {
-      showFeedback(err.message || 'Erro ao simular teste de WhatsApp.', true);
+      showFeedback(err.message || 'Erro ao limpar dados fictícios.', true);
     } finally {
       setIsTesting(false);
     }
@@ -242,7 +246,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     const perm = await requestNotificationPermission();
     setBrowserPermStatus(perm);
     if (perm === 'granted') {
-      sendDesktopNotification('RealizzeTravel Viagens', {
+      sendDesktopNotification('RealizzeTravel', {
         body: 'Notificações na área de trabalho ativadas com sucesso!',
       });
       showFeedback('Notificações de desktop ativadas e autorizadas!');
@@ -370,7 +374,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           }`}
         >
           <Smartphone className="w-4 h-4 text-emerald-600" />
-          <span>WhatsApp Meta API</span>
+          <span>Conexão WhatsApp (QR Code / Meta)</span>
         </button>
 
         <button
@@ -491,25 +495,66 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Horário de Início</label>
-                  <input
-                    type="time"
-                    value={businessHoursStart}
-                    onChange={(e) => setBusinessHoursStart(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                  />
+              {/* Horários Diferenciados: Dias de Semana vs Sábado */}
+              <div className="space-y-3 pt-2">
+                <div className="p-3.5 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800 flex items-center gap-1.5 text-xs">
+                      <span className="w-2 h-2 rounded-full bg-blue-600" />
+                      Dias de Semana (Segunda a Sexta)
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-semibold">Padrão da Agência</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-600 font-medium mb-1 text-[11px]">Início do Expediente</label>
+                      <input
+                        type="time"
+                        value={weekdayHoursStart}
+                        onChange={(e) => setWeekdayHoursStart(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-600 font-medium mb-1 text-[11px]">Encerramento do Expediente</label>
+                      <input
+                        type="time"
+                        value={weekdayHoursEnd}
+                        onChange={(e) => setWeekdayHoursEnd(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Horário de Encerramento</label>
-                  <input
-                    type="time"
-                    value={businessHoursEnd}
-                    onChange={(e) => setBusinessHoursEnd(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                  />
+                <div className="p-3.5 rounded-xl bg-amber-50/50 border border-amber-200/70 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-amber-900 flex items-center gap-1.5 text-xs">
+                      <span className="w-2 h-2 rounded-full bg-amber-500" />
+                      Sábado (Horário Específico Reduzido)
+                    </span>
+                    <span className="text-[10px] text-amber-700 font-semibold">Expediente Especial</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-600 font-medium mb-1 text-[11px]">Início no Sábado</label>
+                      <input
+                        type="time"
+                        value={saturdayHoursStart}
+                        onChange={(e) => setSaturdayHoursStart(e.target.value)}
+                        className="w-full bg-white border border-amber-200 rounded-lg px-3 py-2 text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-600 font-medium mb-1 text-[11px]">Encerramento no Sábado</label>
+                      <input
+                        type="time"
+                        value={saturdayHoursEnd}
+                        onChange={(e) => setSaturdayHoursEnd(e.target.value)}
+                        className="w-full bg-white border border-amber-200 rounded-lg px-3 py-2 text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -602,70 +647,36 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          {/* Interactive Automation Test Card */}
-          <div className="bg-gradient-to-br from-blue-50/80 via-slate-50 to-indigo-50/50 border border-blue-200/80 rounded-2xl p-5 space-y-3.5 shadow-2xs">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div>
-                <h4 className="text-xs font-bold text-slate-900 flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-blue-600" />
-                  Testador das Automações e Fila de Atendimento
-                </h4>
-                <p className="text-[11px] text-slate-600 mt-0.5">
-                  Simule a chegada de uma nova mensagem via WhatsApp para comprovar em tempo real o envio das respostas automáticas e a regra de distribuição da fila.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleTestAutomation}
-                disabled={isTesting}
-                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-2"
-              >
-                {isTesting ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Executando Teste...</span>
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-3.5 h-3.5 fill-white" />
-                    <span>Simular Chegada de Cliente Agora</span>
-                  </>
-                )}
-              </button>
+          {/* Clear Mock / Test History Card */}
+          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
+            <div>
+              <h4 className="text-xs font-bold text-slate-900 flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-rose-600" />
+                Limpeza de Mensagens e Dados Fictícios
+              </h4>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Remove conversas e mensagens fictícias de teste para deixar o painel limpo para a leitura do QR Code do WhatsApp oficial da sua agência.
+              </p>
             </div>
 
-            {testResult && (
-              <div className="p-4 rounded-xl bg-white border border-blue-200 text-xs space-y-2.5 shadow-2xs animate-fadeIn">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    Simulação Executada com Sucesso!
-                  </span>
-                  {onNavigateToChat && (
-                    <button
-                      type="button"
-                      onClick={onNavigateToChat}
-                      className="text-blue-600 hover:text-blue-800 font-bold flex items-center gap-1 text-xs hover:underline"
-                    >
-                      <span>Abrir na Central de Atendimento</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px] pt-2 border-t border-slate-100">
-                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
-                    <span className="text-slate-500 font-semibold block">Regra da Fila Acionada:</span>
-                    <span className="font-bold text-slate-900 mt-0.5 block">{testResult.queueInfo}</span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
-                    <span className="text-slate-500 font-semibold block">Disparo de Mensagem:</span>
-                    <span className="font-bold text-blue-700 mt-0.5 block">{testResult.autoReplyInfo}</span>
-                  </div>
-                </div>
-              </div>
-            )}
+            <button
+              type="button"
+              onClick={handleClearMockData}
+              disabled={isTesting}
+              className="px-4 py-2 rounded-xl bg-white hover:bg-rose-50 hover:text-rose-700 text-slate-700 border border-slate-200 font-bold text-xs shadow-2xs transition-colors flex items-center gap-2 shrink-0"
+            >
+              {isTesting ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Limpando Histórico...</span>
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Limpar Histórico Fictício</span>
+                </>
+              )}
+            </button>
           </div>
 
           <div className="flex justify-end">
@@ -834,7 +845,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      sendDesktopNotification('RealizzeTravel Viagens', {
+                      sendDesktopNotification('RealizzeTravel', {
                         body: 'Teste de notificação de nova mensagem no WhatsApp!',
                       });
                       showFeedback('Notificação de teste disparada na sua tela!');
@@ -872,24 +883,92 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               Seus Dados de Acesso
             </h3>
 
-            <div className="flex flex-col sm:flex-row items-center gap-5 pb-5 border-b border-slate-100">
-              <img
-                src={
-                  profileAvatar ||
-                  'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&h=120&fit=crop&crop=face'
-                }
-                alt={profileName}
-                className="w-16 h-16 rounded-2xl object-cover border-2 border-slate-200 shadow-xs"
-              />
-              <div className="flex-1 w-full space-y-1">
-                <label className="block text-xs font-semibold text-slate-700">URL da Foto de Perfil (Avatar)</label>
-                <input
-                  type="url"
-                  placeholder="https://images.unsplash.com/..."
-                  value={profileAvatar}
-                  onChange={(e) => setProfileAvatar(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                />
+            <div className="space-y-4 pb-5 border-b border-slate-100">
+              <div className="flex flex-col sm:flex-row items-center gap-5">
+                <div className="relative shrink-0">
+                  <img
+                    src={
+                      profileAvatar ||
+                      'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&h=120&fit=crop&crop=face'
+                    }
+                    alt={profileName}
+                    className="w-20 h-20 rounded-2xl object-cover border-2 border-emerald-300 shadow-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => profileFileInputRef.current?.click()}
+                    className="absolute -bottom-1 -right-1 p-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full shadow-md transition-colors"
+                    title="Fazer Upload de Foto"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="flex-1 w-full space-y-2">
+                  <input
+                    type="file"
+                    ref={profileFileInputRef}
+                    onChange={handleProfilePhotoUpload}
+                    accept="image/*"
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => profileFileInputRef.current?.click()}
+                    className="w-full sm:w-auto px-4 py-2 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-700 flex items-center justify-center gap-1.5 shadow-xs transition-colors"
+                  >
+                    <Upload className="w-4 h-4 text-emerald-600" />
+                    <span>Fazer Upload de Foto do Computador</span>
+                  </button>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 mb-1">Ou informe uma URL de imagem:</label>
+                    <input
+                      type="url"
+                      placeholder="https://images.unsplash.com/..."
+                      value={profileAvatar}
+                      onChange={(e) => setProfileAvatar(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Preset Gallery */}
+              <div className="pt-2">
+                <span className="text-[11px] font-semibold text-slate-500 block mb-2">
+                  Ou selecione uma foto profissional pronta:
+                </span>
+                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                  {[
+                    'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=200&h=200&fit=crop&crop=face',
+                    'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=200&h=200&fit=crop&crop=face',
+                    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=200&fit=crop&crop=face',
+                    'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&h=200&fit=crop&crop=face',
+                    'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&h=200&fit=crop&crop=face',
+                    'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=200&h=200&fit=crop&crop=face',
+                    'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=200&h=200&fit=crop&crop=face',
+                    'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=200&h=200&fit=crop&crop=face',
+                    'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=200&h=200&fit=crop&crop=face',
+                    'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=200&h=200&fit=crop&crop=face',
+                  ].map((url, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setProfileAvatar(url)}
+                      className={`relative rounded-full shrink-0 transition-transform hover:scale-105 ${
+                        profileAvatar === url ? 'ring-3 ring-emerald-500 ring-offset-2' : 'opacity-70 hover:opacity-100'
+                      }`}
+                    >
+                      <img src={url} alt="Preset" className="w-10 h-10 rounded-full object-cover" />
+                      {profileAvatar === url && (
+                        <span className="absolute -top-1 -right-1 w-4 h-4 bg-emerald-600 text-white rounded-full flex items-center justify-center text-[10px]">
+                          <Check className="w-2.5 h-2.5" />
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 

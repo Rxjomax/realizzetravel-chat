@@ -155,8 +155,12 @@ export function broadcastEvent(
 
   for (const client of clients) {
     if (client.ws.readyState === WebSocket.OPEN) {
-      if (organizationId && client.organizationId && client.organizationId !== organizationId) {
-        continue;
+      if (organizationId && client.organizationId) {
+        const isDefaultOrgA = client.organizationId === 'org_realizzetravel' || client.organizationId === 'org_voolivre';
+        const isDefaultOrgB = organizationId === 'org_realizzetravel' || organizationId === 'org_voolivre';
+        if (!(isDefaultOrgA && isDefaultOrgB) && client.organizationId !== organizationId) {
+          continue;
+        }
       }
       if (excludeUserId && client.userId === excludeUserId) {
         continue;

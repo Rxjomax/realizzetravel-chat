@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { dbGet, dbQuery, dbRun, dbTransaction } from '../db/database';
 import { authenticateToken, AuthenticatedRequest } from '../auth/middleware';
 import { broadcastEvent } from '../realtime/ws';
+import { WhatsAppService } from '../services/whatsapp.service';
 
 export const conversationsRouter = Router();
 
@@ -58,6 +59,22 @@ conversationsRouter.get('/', authenticateToken, (req: AuthenticatedRequest, res:
     const { status, filter, search } = req.query;
     const userId = req.user!.id;
 
+    // Regra de Negócio: Se o atendente não interagir no chat em 1 dia (24h), o cliente volta para aguardando
+    try {
+      dbRun(
+        `UPDATE conversations
+         SET status = 'WAITING', assigned_user_id = NULL, updated_at = datetime('now')
+         WHERE (organization_id = ? OR organization_id = 'org_realizzetravel' OR organization_id = 'org_voolivre')
+           AND status IN ('OPEN', 'ASSIGNED')
+           AND assigned_user_id IS NOT NULL
+           AND (strftime('%s', 'now') - strftime('%s', updated_at)) > 86400
+           AND (strftime('%s', 'now') - strftime('%s', COALESCE(last_message_at, updated_at))) > 86400`,
+        [orgId]
+      );
+    } catch (e) {
+      // Ignored if error
+    }
+
     let sql = `
       SELECT
         c.id, c.organization_id, c.customer_id, c.assigned_user_id, c.status, c.priority,
@@ -68,18 +85,19 @@ conversationsRouter.get('/', authenticateToken, (req: AuthenticatedRequest, res:
       FROM conversations c
       JOIN customers cust ON cust.id = c.customer_id
       LEFT JOIN users u ON u.id = c.assigned_user_id
-      WHERE c.organization_id = ?
+      WHERE (c.organization_id = ? OR c.organization_id = 'org_realizzetravel' OR c.organization_id = 'org_voolivre')
     `;
     const params: any[] = [orgId];
 
-    if (filter === 'WAITING' || status === 'WAITING') {
+    const normFilter = String(filter || status || '').toUpperCase();
+    if (normFilter === 'WAITING' || normFilter === 'AGUARDANDO') {
       sql += " AND c.status = 'WAITING'";
-    } else if (filter === 'OPEN' || status === 'OPEN') {
+    } else if (normFilter === 'OPEN' || normFilter === 'EM ATENDIMENTO' || normFilter === 'ANDAMENTO') {
       sql += " AND c.status IN ('OPEN', 'ASSIGNED')";
-    } else if (filter === 'MY') {
+    } else if (normFilter === 'MY' || normFilter === 'MINE' || normFilter === 'MINHAS') {
       sql += " AND c.status IN ('OPEN', 'ASSIGNED') AND c.assigned_user_id = ?";
       params.push(userId);
-    } else if (filter === 'CLOSED' || status === 'CLOSED') {
+    } else if (normFilter === 'CLOSED' || normFilter === 'ENCERRADAS' || normFilter === 'FINALIZADAS') {
       sql += " AND c.status = 'CLOSED'";
     }
 
@@ -171,7 +189,7 @@ conversationsRouter.get('/:id', authenticateToken, (req: AuthenticatedRequest, r
       FROM conversations c
       JOIN customers cust ON cust.id = c.customer_id
       LEFT JOIN users u ON u.id = c.assigned_user_id
-      WHERE c.id = ? AND c.organization_id = ?`,
+      WHERE c.id = ? AND (c.organization_id = ? OR c.organization_id = 'org_realizzetravel' OR c.organization_id = 'org_voolivre')`,
       [convId, orgId]
     );
 
@@ -181,7 +199,11 @@ conversationsRouter.get('/:id', authenticateToken, (req: AuthenticatedRequest, r
     }
 
     const messages = dbQuery<any>(
-      'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC',
+      `SELECT m.*, u.name as sender_name, u.avatar as sender_avatar
+       FROM messages m
+       LEFT JOIN users u ON u.id = m.sender_id
+       WHERE m.conversation_id = ?
+       ORDER BY m.created_at ASC`,
       [convId]
     );
 
@@ -248,7 +270,7 @@ conversationsRouter.post('/:id/assign', authenticateToken, (req: AuthenticatedRe
     const result = dbTransaction(() => {
       // Check current state with lock
       const current = dbGet<any>(
-        'SELECT id, assigned_user_id, status FROM conversations WHERE id = ? AND organization_id = ?',
+        'SELECT id, assigned_user_id, status FROM conversations WHERE id = ? AND (organization_id = ? OR organization_id = \'org_realizzetravel\' OR organization_id = \'org_voolivre\')',
         [convId, orgId]
       );
 
@@ -256,8 +278,8 @@ conversationsRouter.post('/:id/assign', authenticateToken, (req: AuthenticatedRe
         return { error: 'Conversa não encontrada.', status: 404 };
       }
 
-      // Check if already assigned to someone else
-      if (current.assigned_user_id && current.assigned_user_id !== userId) {
+      // Check if already assigned to someone else (only block if it was already OPEN and assigned to someone else)
+      if (current.status !== 'WAITING' && current.assigned_user_id && current.assigned_user_id !== userId) {
         const assignedUser = dbGet<any>('SELECT name FROM users WHERE id = ?', [current.assigned_user_id]);
         return {
           error: `Esta conversa já foi assumida por ${assignedUser?.name || 'outro atendente'}.`,
@@ -265,20 +287,21 @@ conversationsRouter.post('/:id/assign', authenticateToken, (req: AuthenticatedRe
         };
       }
 
-      // Perform atomic update verifying assigned_user_id is still NULL or current user
-      const updateRes = dbRun(
+      // Perform update to assign this conversation and mark OPEN
+      dbRun(
         `UPDATE conversations
-         SET assigned_user_id = ?, status = 'OPEN', updated_at = ?
-         WHERE id = ? AND (assigned_user_id IS NULL OR assigned_user_id = ?)`,
-        [userId, now, convId, userId]
+         SET assigned_user_id = ?, status = 'OPEN', updated_at = ?, last_message_at = ?
+         WHERE id = ?`,
+        [userId, now, now, convId]
       );
 
-      if (updateRes.changes === 0) {
-        return {
-          error: 'Esta conversa já foi assumida simultaneamente por outro atendente.',
-          status: 409,
-        };
-      }
+      // Add system message into messages log
+      const sysMsgId = `msg_assign_${Date.now()}`;
+      dbRun(
+        `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, status, created_at)
+         VALUES (?, ?, ?, 'SYSTEM', ?, 'text', ?, 'delivered', ?)`,
+        [sysMsgId, orgId, convId, userId, `Atendimento iniciado por ${req.user!.name}.`, now]
+      );
 
       // Record event
       dbRun(
@@ -344,7 +367,7 @@ conversationsRouter.post('/:id/messages', authenticateToken, (req: Authenticated
     }
 
     const conv = dbGet<any>(
-      'SELECT id, assigned_user_id, status FROM conversations WHERE id = ? AND organization_id = ?',
+      'SELECT c.id, c.customer_id, c.assigned_user_id, c.status, cust.phone, cust.name FROM conversations c LEFT JOIN customers cust ON c.customer_id = cust.id WHERE c.id = ? AND c.organization_id = ?',
       [convId, orgId]
     );
 
@@ -379,12 +402,16 @@ conversationsRouter.post('/:id/messages', authenticateToken, (req: Authenticated
       );
     });
 
+    const senderUser = dbGet<{ name: string; avatar: string }>('SELECT name, avatar FROM users WHERE id = ?', [userId]);
+
     const createdMessage = {
       id: msgId,
       organization_id: orgId,
       conversation_id: convId,
       sender_type: 'AGENT',
       sender_id: userId,
+      sender_name: senderUser?.name || req.user!.name,
+      sender_avatar: senderUser?.avatar || req.user!.avatar || null,
       message_type: messageType,
       content: content.trim(),
       media_url: mediaUrl || null,
@@ -397,6 +424,13 @@ conversationsRouter.post('/:id/messages', authenticateToken, (req: Authenticated
       conversationId: convId,
       message: createdMessage,
     }, orgId);
+
+    // Send to WhatsApp via active integration (Meta Cloud API or QR Code Gateway)
+    if (conv?.phone) {
+      WhatsAppService.sendTextMessage(conv.phone, content.trim(), orgId).catch((waErr) => {
+        console.warn('Warning sending WhatsApp message to external provider:', waErr);
+      });
+    }
 
     res.status(201).json({ message: createdMessage });
   } catch (error) {
@@ -479,6 +513,7 @@ conversationsRouter.post('/:id/close', authenticateToken, (req: AuthenticatedReq
     const convId = req.params.id;
     const userId = req.user!.id;
     const orgId = req.user!.organization_id;
+    const { outcome, saleValue, lostReason } = req.body || {};
     const now = new Date().toISOString();
 
     dbTransaction(() => {
@@ -494,7 +529,7 @@ conversationsRouter.post('/:id/close', authenticateToken, (req: AuthenticatedReq
           convId,
           userId,
           'CLOSED',
-          JSON.stringify({ closedBy: req.user!.name }),
+          JSON.stringify({ closedBy: req.user!.name, outcome, saleValue, lostReason }),
           now,
         ]
       );
@@ -506,7 +541,7 @@ conversationsRouter.post('/:id/close', authenticateToken, (req: AuthenticatedReq
           orgId,
           userId,
           'CONVERSATION_CLOSED',
-          JSON.stringify({ conversationId: convId }),
+          JSON.stringify({ conversationId: convId, outcome, saleValue, lostReason }),
           now,
         ]
       );
@@ -517,6 +552,9 @@ conversationsRouter.post('/:id/close', authenticateToken, (req: AuthenticatedReq
       closedByUserId: userId,
       closedByUserName: req.user!.name,
       closedAt: now,
+      outcome,
+      saleValue,
+      lostReason,
     }, orgId);
 
     res.json({ success: true, message: 'Atendimento encerrado com sucesso.' });

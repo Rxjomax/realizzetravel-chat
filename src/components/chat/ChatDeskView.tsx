@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { socketClient } from '../../services/socket';
@@ -22,7 +22,22 @@ import {
   Sparkles,
   CheckCircle2,
   MessageSquare,
+  TrendingUp,
+  ThumbsUp,
+  ThumbsDown,
+  ArrowDown,
 } from 'lucide-react';
+import { extractTravelParameters, hasExtractedAnyInfo, parseBudgetValue } from '../../utils/travelExtractor';
+
+export function extractConsultantName(fullName?: string): string {
+  if (!fullName) return 'Consultor';
+  const parenMatch = fullName.match(/\(([^)]+)\)/);
+  if (parenMatch && parenMatch[1]) {
+    return parenMatch[1].trim();
+  }
+  const clean = fullName.replace(/\s*\([^)]*\)/g, '').trim();
+  return clean || fullName;
+}
 
 export const ChatDeskView: React.FC = () => {
   const { user } = useAuth();
@@ -34,6 +49,8 @@ export const ChatDeskView: React.FC = () => {
   const [events, setEvents] = useState<any[]>([]);
   const [notes, setNotes] = useState<any[]>([]);
   const [activeFilter, setActiveFilter] = useState<'ALL' | 'WAITING' | 'OPEN' | 'MY' | 'CLOSED'>('ALL');
+  const [agentsMap, setAgentsMap] = useState<Record<string, User>>({});
+  const [includeAgentPrefix, setIncludeAgentPrefix] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -46,8 +63,16 @@ export const ChatDeskView: React.FC = () => {
   const [targetAgentId, setTargetAgentId] = useState('');
   const [transferReason, setTransferReason] = useState('');
 
-  // Close confirmation modal
+  // Close & Sales Conversion Modal State
   const [closeModalOpen, setCloseModalOpen] = useState(false);
+  const [saleOutcome, setSaleOutcome] = useState<'WON' | 'LOST'>('WON');
+  const [saleValueInput, setSaleValueInput] = useState<string>('');
+  const [lostReason, setLostReason] = useState<string>('Orçamento acima do esperado');
+  const [customLostReason, setCustomLostReason] = useState<string>('');
+
+  // Auto-extraction indicators
+  const [autoExtractedSuccess, setAutoExtractedSuccess] = useState(false);
+  const [isAutoExtracting, setIsAutoExtracting] = useState(false);
 
   // Travel detail edit mode
   const [editingTravelInfo, setEditingTravelInfo] = useState(false);
@@ -59,14 +84,36 @@ export const ChatDeskView: React.FC = () => {
   // New Note
   const [newNoteContent, setNewNoteContent] = useState('');
 
+  // Auto-scroll and Pin Reply Box Refs & States
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageContainerRef = useRef<HTMLDivElement>(null);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior });
+    }
+  }, []);
+
+  const handleMessageScroll = useCallback(() => {
+    if (!messageContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = messageContainerRef.current;
+    const isFar = scrollHeight - scrollTop - clientHeight > 160;
+    setShowScrollBottom(isFar);
+  }, []);
+
   const fetchConversations = useCallback(async () => {
     try {
       const data = await api.getConversations(activeFilter === 'ALL' ? undefined : activeFilter, searchQuery);
-      setConversations(data.conversations);
+      // Deduplicate conversations by ID
+      const uniqueConvs = (data.conversations || []).filter((c, idx, arr) =>
+        arr.findIndex((item) => item.id === c.id) === idx
+      );
+      setConversations(uniqueConvs);
 
       // If no conversation is selected, select the first one if available
-      if (!selectedConvId && data.conversations.length > 0) {
-        setSelectedConvId(data.conversations[0].id);
+      if (!selectedConvId && uniqueConvs.length > 0) {
+        setSelectedConvId(uniqueConvs[0].id);
       }
     } catch (err) {
       console.error('Error fetching conversations:', err);
@@ -77,15 +124,62 @@ export const ChatDeskView: React.FC = () => {
     try {
       const data = await api.getConversationDetails(id);
       setSelectedConv(data.conversation);
-      setMessages(data.messages);
+      // Deduplicate messages by ID to prevent duplicate key errors
+      const seenMsgIds = new Set<string>();
+      const uniqueMsgs = (data.messages || []).filter((m: Message) => {
+        const msgKey = m.id || `temp_${Math.random()}`;
+        if (seenMsgIds.has(msgKey)) return false;
+        seenMsgIds.add(msgKey);
+        return true;
+      });
+      setMessages(uniqueMsgs);
       setEvents(data.events);
       setNotes(data.notes);
 
       // Pre-fill editable fields
-      setTravelDestination(data.conversation.customer?.destination_interest || '');
-      setTravelDate(data.conversation.customer?.travel_date || '');
-      setTravelPassengers(data.conversation.customer?.passenger_count || 2);
-      setTravelBudget(data.conversation.customer?.budget || '');
+      const cust = data.conversation.customer;
+      setTravelDestination(cust?.destination_interest || '');
+      setTravelDate(cust?.travel_date || '');
+      setTravelPassengers(cust?.passenger_count || 2);
+      setTravelBudget(cust?.budget || '');
+
+      // Automatic travel parameters extraction from messages
+      if (data.messages && data.messages.length > 0 && cust) {
+        const allCustomerText = data.messages
+          .filter((m: Message) => m.sender_type === 'CUSTOMER')
+          .map((m: Message) => m.content)
+          .join('\n');
+
+        if (allCustomerText) {
+          const extracted = extractTravelParameters(allCustomerText);
+          if (hasExtractedAnyInfo(extracted)) {
+            const hasNewDest = !cust.destination_interest && extracted.destination;
+            const hasNewDate = !cust.travel_date && extracted.travelDate;
+            const hasNewBudget = !cust.budget && extracted.budget;
+            const hasNewPax = (!cust.passenger_count || cust.passenger_count === 1) && extracted.passengerCount;
+
+            if (hasNewDest || hasNewDate || hasNewBudget || hasNewPax) {
+              api.updateCustomerTravelParams(cust.id, {
+                destination_interest: extracted.destination || cust.destination_interest,
+                travel_date: extracted.travelDate || cust.travel_date,
+                passenger_count: extracted.passengerCount || cust.passenger_count,
+                budget: extracted.budget || cust.budget,
+                auto_extracted: true,
+              }).then((res) => {
+                if (res.success && res.customer) {
+                  setSelectedConv((prev) => prev ? { ...prev, customer: res.customer } : null);
+                  if (res.customer.destination_interest) setTravelDestination(res.customer.destination_interest);
+                  if (res.customer.travel_date) setTravelDate(res.customer.travel_date);
+                  if (res.customer.passenger_count) setTravelPassengers(res.customer.passenger_count);
+                  if (res.customer.budget) setTravelBudget(res.customer.budget);
+                  setAutoExtractedSuccess(true);
+                  setTimeout(() => setAutoExtractedSuccess(false), 5000);
+                }
+              }).catch(() => {});
+            }
+          }
+        }
+      }
     } catch (err) {
       console.error('Error fetching details:', err);
     }
@@ -152,6 +246,13 @@ export const ChatDeskView: React.FC = () => {
       }
     });
 
+    const unbindCleared = socketClient.on('conversation:cleared', () => {
+      fetchConversations();
+      setSelectedConv(null);
+      setSelectedConvId(null);
+      setMessages([]);
+    });
+
     return () => {
       unbindCreated();
       unbindAssigned();
@@ -160,20 +261,103 @@ export const ChatDeskView: React.FC = () => {
       unbindClosed();
       unbindReopened();
       unbindPollSync();
+      unbindCleared();
     };
   }, [fetchConversations, fetchConversationDetails, selectedConvId]);
+
+  // Auto-scroll to bottom on conversation change
+  useEffect(() => {
+    if (selectedConvId) {
+      scrollToBottom('auto');
+    }
+  }, [selectedConvId, scrollToBottom]);
+
+  // Auto-scroll smoothly when new messages arrive
+  useEffect(() => {
+    if (messages.length > 0) {
+      scrollToBottom('smooth');
+    }
+  }, [messages.length, scrollToBottom]);
+
+  const loadAgentsMap = useCallback(async () => {
+    try {
+      const res = await api.getUsers();
+      const map: Record<string, User> = {};
+      res.users.forEach((u) => {
+        map[u.id] = u;
+      });
+      setAgentsMap(map);
+    } catch (e) {
+      console.error('Error loading agents map:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAgentsMap();
+  }, [loadAgentsMap]);
 
   // Handle "Atender" atomic action
   const handleAssign = async () => {
     if (!selectedConvId) return;
     setIsAssigning(true);
     setErrorMessage(null);
+
+    const nowIso = new Date().toISOString();
+
+    // Optimistic UI update: immediately transition conversation to OPEN
+    const currentAttendant = user || {
+      id: 'usr_agent',
+      name: 'Você',
+      role: 'AGENT',
+      status: 'ONLINE',
+      email: '',
+      organization_id: 'org_realizzetravel',
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+
+    setSelectedConv((prev) =>
+      prev
+        ? {
+            ...prev,
+            status: 'OPEN',
+            assigned_user_id: currentAttendant.id,
+            assigned_user: currentAttendant as any,
+            updated_at: nowIso,
+            last_message_at: nowIso,
+            auto_requeued_inactivity: false,
+          }
+        : null
+    );
+
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === selectedConvId
+          ? {
+              ...c,
+              status: 'OPEN',
+              assigned_user_id: currentAttendant.id,
+              assigned_user: currentAttendant as any,
+              updated_at: nowIso,
+              last_message_at: nowIso,
+              auto_requeued_inactivity: false,
+            }
+          : c
+      )
+    );
+
     try {
       await api.assignConversation(selectedConvId);
       await fetchConversationDetails(selectedConvId);
-      await fetchConversations();
+      if (activeFilter === 'WAITING') {
+        setActiveFilter('OPEN');
+      } else {
+        await fetchConversations();
+      }
     } catch (err: any) {
       setErrorMessage(err.message || 'Esta conversa já foi assumida por outro atendente.');
+      await fetchConversationDetails(selectedConvId);
+      await fetchConversations();
     } finally {
       setIsAssigning(false);
     }
@@ -182,16 +366,31 @@ export const ChatDeskView: React.FC = () => {
   // Handle Send Message
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || !selectedConvId) return;
+    if (!inputText.trim() || !selectedConvId || isSending) return;
 
+    const rawText = inputText.trim();
     setIsSending(true);
+    setInputText(''); // Clear input immediately to prevent double submissions
+
     try {
-      const res = await api.sendMessage(selectedConvId, inputText);
-      setMessages((prev) => [...prev, res.message]);
-      setInputText('');
+      let messageToSend = rawText;
+      if (includeAgentPrefix) {
+        const shortName = extractConsultantName(user?.name);
+        const prefix = `*[${shortName}]*:`;
+        if (!messageToSend.startsWith(`*[${shortName}]*`) && !messageToSend.startsWith(`${shortName}:`)) {
+          messageToSend = `${prefix} ${messageToSend}`;
+        }
+      }
+
+      const res = await api.sendMessage(selectedConvId, messageToSend);
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === res.message.id)) return prev;
+        return [...prev, res.message];
+      });
       await fetchConversations();
     } catch (err: any) {
       setErrorMessage(err.message || 'Não foi possível enviar a mensagem.');
+      setInputText(rawText); // Restore original text if sending failed
     } finally {
       setIsSending(false);
     }
@@ -223,16 +422,67 @@ export const ChatDeskView: React.FC = () => {
     }
   };
 
-  // Handle Close Conversation
+  // Open Close Modal with defaults
+  const handleOpenCloseModal = () => {
+    setSaleOutcome('WON');
+    const budgetVal = parseBudgetValue(selectedConv?.customer?.budget);
+    setSaleValueInput(budgetVal ? `R$ ${budgetVal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : 'R$ 5.000,00');
+    setLostReason('Orçamento acima do esperado');
+    setCustomLostReason('');
+    setCloseModalOpen(true);
+  };
+
+  // Handle Close Conversation with Sales Outcome Tracking
   const handleConfirmClose = async () => {
     if (!selectedConvId) return;
     try {
-      await api.closeConversation(selectedConvId);
+      const numValue =
+        saleOutcome === 'WON'
+          ? (parseFloat(saleValueInput.replace(/[^0-9.]/g, '')) || parseBudgetValue(selectedConv?.customer?.budget) || 0)
+          : undefined;
+      const finalLost =
+        saleOutcome === 'LOST'
+          ? (lostReason === 'Outro' ? customLostReason || 'Outro motivo' : lostReason)
+          : undefined;
+
+      await api.closeConversation(selectedConvId, saleOutcome, numValue, finalLost);
       setCloseModalOpen(false);
       await fetchConversationDetails(selectedConvId);
       await fetchConversations();
     } catch (err: any) {
       setErrorMessage(err.message || 'Erro ao encerrar atendimento.');
+    }
+  };
+
+  // Trigger auto extraction manually on demand
+  const handleTriggerAutoExtraction = async () => {
+    if (!selectedConv?.customer?.id || messages.length === 0) return;
+    setIsAutoExtracting(true);
+    try {
+      const allText = messages.map((m) => m.content).join('\n');
+      const extracted = extractTravelParameters(allText);
+      if (hasExtractedAnyInfo(extracted)) {
+        const res = await api.updateCustomerTravelParams(selectedConv.customer.id, {
+          destination_interest: extracted.destination || selectedConv.customer.destination_interest,
+          travel_date: extracted.travelDate || selectedConv.customer.travel_date,
+          passenger_count: extracted.passengerCount || selectedConv.customer.passenger_count,
+          budget: extracted.budget || selectedConv.customer.budget,
+          auto_extracted: true,
+        });
+        if (res.success && res.customer) {
+          setSelectedConv((prev) => (prev ? { ...prev, customer: res.customer } : null));
+          if (res.customer.destination_interest) setTravelDestination(res.customer.destination_interest);
+          if (res.customer.travel_date) setTravelDate(res.customer.travel_date);
+          if (res.customer.passenger_count) setTravelPassengers(res.customer.passenger_count);
+          if (res.customer.budget) setTravelBudget(res.customer.budget);
+          setAutoExtractedSuccess(true);
+          setTimeout(() => setAutoExtractedSuccess(false), 5000);
+        }
+      }
+    } catch (err) {
+      console.error('Error triggering auto extraction:', err);
+    } finally {
+      setIsAutoExtracting(false);
     }
   };
 
@@ -282,12 +532,39 @@ export const ChatDeskView: React.FC = () => {
   const isSupervisorOrAdmin = user?.role === 'ADMIN' || user?.role === 'SUPERVISOR';
   const canReply = isAssignedToMe || isSupervisorOrAdmin;
 
+  // Deduplicate messages safely for rendering to eliminate duplicate bubbles & duplicate key warnings
+  const displayMessages = useMemo(() => {
+    const seenIds = new Set<string>();
+    const seenSignatures = new Set<string>();
+
+    return messages.filter((m) => {
+      if (!m) return false;
+
+      // 1. Deduplicate by unique message ID
+      if (m.id) {
+        if (seenIds.has(m.id)) return false;
+        seenIds.add(m.id);
+      }
+
+      // 2. Deduplicate near-instant identical messages from same sender in same conversation
+      const timestamp = m.created_at ? new Date(m.created_at).getTime() : 0;
+      const timeBucket = timestamp > 0 ? Math.floor(timestamp / 5000) : 0;
+      const signature = `${m.conversation_id || ''}_${m.sender_type || ''}_${m.sender_id || ''}_${m.content || ''}_${timeBucket}`;
+      if (seenSignatures.has(signature)) {
+        return false;
+      }
+      seenSignatures.add(signature);
+
+      return true;
+    });
+  }, [messages]);
+
   return (
-    <div className="flex-1 flex flex-col md:flex-row overflow-hidden bg-[#F8FAFC] text-slate-800">
+    <div className="flex-1 h-full min-h-0 flex flex-col md:flex-row overflow-hidden bg-[#F8FAFC] text-slate-800">
       {/* ========================================================================= */}
       {/* COLUNA 1 — LISTA DE CONVERSAS (Fila, Filtros, Busca)                       */}
       {/* ========================================================================= */}
-      <div className="w-full md:w-80 lg:w-96 bg-white border-r border-slate-200 flex flex-col shrink-0">
+      <div className="w-full md:w-80 lg:w-96 bg-white border-r border-slate-200 flex flex-col shrink-0 h-full min-h-0 overflow-hidden">
         {/* Search & Filter Header */}
         <div className="p-4 border-b border-slate-100 space-y-3">
           <div className="relative">
@@ -392,10 +669,17 @@ export const ChatDeskView: React.FC = () => {
                     <div className="flex items-center justify-between text-[10px]">
                       {/* Status / Attendant */}
                       {isWaiting ? (
-                        <span className="inline-flex items-center gap-1.5 font-bold text-[10px] text-amber-700 bg-amber-100/80 border border-amber-200 px-2 py-0.5 rounded-full">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                          Aguardando
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="inline-flex items-center gap-1.5 font-bold text-[10px] text-amber-700 bg-amber-100/80 border border-amber-200 px-2 py-0.5 rounded-full">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                            Aguardando
+                          </span>
+                          {(c.auto_requeued_inactivity || (Date.now() - new Date(c.last_message_at).getTime()) > 86400000) && (
+                            <span className="text-[9px] font-bold text-amber-950 bg-amber-200 border border-amber-300 px-1.5 py-0.2 rounded-full" title="Reenfileirado: atendente ausente por mais de 24h">
+                              ⏰ &gt;24h Fila
+                            </span>
+                          )}
+                        </div>
                       ) : c.assigned_user ? (
                         <span className="text-slate-500 font-medium flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
@@ -423,7 +707,7 @@ export const ChatDeskView: React.FC = () => {
       {/* ========================================================================= */}
       {/* COLUNA 2 — CONVERSA (Histórico, Mensagens, Atender/Transferir/Encerrar)     */}
       {/* ========================================================================= */}
-      <div className="flex-1 flex flex-col bg-[#F8FAFC] min-w-0 border-r border-slate-200">
+      <div className="flex-1 flex flex-col bg-[#F8FAFC] min-w-0 border-r border-slate-200 h-full min-h-0 overflow-hidden relative">
         {selectedConv ? (
           <>
             {/* Top Bar of Active Conversation */}
@@ -483,9 +767,9 @@ export const ChatDeskView: React.FC = () => {
                     </button>
 
                     <button
-                      onClick={() => setCloseModalOpen(true)}
+                      onClick={handleOpenCloseModal}
                       className="px-3.5 py-1.5 bg-white border border-rose-200 hover:bg-rose-50 text-rose-600 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
-                      title="Encerrar atendimento"
+                      title="Encerrar atendimento com relatório de conversão"
                     >
                       <XCircle className="w-3.5 h-3.5 text-rose-500" />
                       <span className="hidden sm:inline">Finalizar</span>
@@ -519,7 +803,11 @@ export const ChatDeskView: React.FC = () => {
             )}
 
             {/* Chat Messages List with WhatsApp Styling */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-3.5 whatsapp-chat-bg">
+            <div
+              ref={messageContainerRef}
+              onScroll={handleMessageScroll}
+              className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-3.5 whatsapp-chat-bg"
+            >
               <div className="flex flex-col items-center my-1">
                 <span className="bg-white/80 backdrop-blur-xs text-slate-500 text-[10px] px-3 py-1 rounded-full font-bold shadow-xs border border-slate-200/50">
                   Mensagens Oficiais do WhatsApp
@@ -532,12 +820,20 @@ export const ChatDeskView: React.FC = () => {
                 </div>
               )}
 
-              {messages.map((m) => {
+              {displayMessages.map((m, idx) => {
                 const isCustomer = m.sender_type === 'CUSTOMER';
                 const isSystem = m.sender_type === 'SYSTEM';
+
+                // Resolve agent profile dynamically from live agentsMap or message fields
+                const agentUser = m.sender_id ? agentsMap[m.sender_id] : null;
+                const rawSenderName = agentUser?.name || m.sender_name || (m.sender_id === user?.id ? user?.name : 'Consultor RealizzeTravel');
+                const consultantDisplayName = extractConsultantName(rawSenderName);
+                const consultantAvatar = agentUser?.avatar || m.sender_avatar || (m.sender_id === user?.id ? user?.avatar : undefined);
+                const isSelf = m.sender_id === user?.id;
+
                 return (
                   <div
-                    key={m.id}
+                    key={m.id ? `msg_${m.id}` : `msg_idx_${idx}`}
                     className={`flex flex-col ${isCustomer ? 'items-start' : 'items-end'}`}
                   >
                     <div
@@ -549,19 +845,54 @@ export const ChatDeskView: React.FC = () => {
                           : 'bg-[#d9fdd3] text-[#111b21] rounded-tr-xs border border-[#c4f0bd]'
                       }`}
                     >
-                      <div className="text-[11px] font-bold mb-1 opacity-80 flex items-center gap-1.5">
+                      <div className="text-[11px] font-bold mb-1 opacity-90 flex items-center gap-1.5">
                         {isCustomer ? (
-                          selectedConv.customer?.name
+                          <div className="flex items-center gap-1.5 text-slate-700">
+                            <div className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[9px] font-bold flex items-center justify-center shrink-0">
+                              {(selectedConv.customer?.name || 'C').charAt(0)}
+                            </div>
+                            <span>{selectedConv.customer?.name || 'Passageiro'}</span>
+                          </div>
                         ) : isSystem ? (
-                          <>
-                            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                          <div className="flex items-center gap-1.5 text-amber-800">
+                            <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                             <span>Resposta Automática (Sistema)</span>
-                          </>
+                          </div>
                         ) : (
-                          'Você (Agência)'
+                          <div className="flex items-center gap-1.5 text-emerald-950">
+                            {consultantAvatar ? (
+                              <img
+                                src={consultantAvatar}
+                                alt={consultantDisplayName}
+                                className="w-4 h-4 rounded-full object-cover ring-1 ring-emerald-700/30 shrink-0"
+                              />
+                            ) : (
+                              <div className="w-4 h-4 rounded-full bg-emerald-700 text-white text-[9px] font-bold flex items-center justify-center shrink-0">
+                                {consultantDisplayName.charAt(0)}
+                              </div>
+                            )}
+                            <span className="font-bold text-emerald-950">{consultantDisplayName}</span>
+                            <span className="text-[9px] font-semibold text-emerald-700 bg-emerald-100/90 px-1.5 py-0.2 rounded-full">
+                              Consultor
+                            </span>
+                            {isSelf && (
+                              <span className="text-[9px] text-emerald-700/70 font-medium">
+                                (você)
+                              </span>
+                            )}
+                          </div>
                         )}
                       </div>
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{m.content}</p>
+
+                      <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                        {!isCustomer && !isSystem && !m.content.startsWith(`*[${consultantDisplayName}]*`) && !m.content.startsWith(`${consultantDisplayName}:`) && (
+                          <span className="font-bold text-emerald-900 text-xs block mb-0.5 select-none">
+                            {consultantDisplayName}:
+                          </span>
+                        )}
+                        {m.content}
+                      </p>
+
                       <div
                         className={`flex items-center gap-1.5 text-[10px] mt-1 justify-end ${
                           isCustomer ? 'text-slate-400' : isSystem ? 'text-amber-700/70' : 'text-slate-500'
@@ -584,11 +915,24 @@ export const ChatDeskView: React.FC = () => {
                   </div>
                 );
               })}
+              <div ref={messagesEndRef} />
             </div>
+
+            {/* Jump to bottom button when scrolled up */}
+            {showScrollBottom && (
+              <button
+                type="button"
+                onClick={() => scrollToBottom('smooth')}
+                className="absolute bottom-24 right-6 z-30 bg-white/95 hover:bg-white text-slate-700 hover:text-emerald-700 px-3 py-1.5 rounded-full shadow-lg border border-slate-200 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <ArrowDown className="w-3.5 h-3.5 text-emerald-600 animate-bounce" />
+                <span>Mensagens recentes</span>
+              </button>
+            )}
 
             {/* Bottom Message Input Box + Travel Quick Replies */}
             {selectedConv.status !== 'CLOSED' ? (
-              <div className="p-3.5 bg-white border-t border-slate-200 shrink-0 space-y-2.5">
+              <div className="p-3 sm:p-3.5 bg-white border-t border-slate-200 shrink-0 sticky bottom-0 z-20 shadow-xs space-y-2.5">
                 {!canReply && (
                   <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-center gap-2 font-medium">
                     <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
@@ -633,27 +977,47 @@ export const ChatDeskView: React.FC = () => {
                   </div>
                 )}
 
-                <form onSubmit={handleSendMessage} className="flex items-center gap-2.5">
-                  <input
-                    type="text"
-                    disabled={!canReply || isSending}
-                    placeholder={
-                      canReply
-                        ? 'Escreva sua mensagem no WhatsApp...'
-                        : 'Assuma o atendimento para responder...'
-                    }
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!canReply || isSending || !inputText.trim()}
-                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors"
-                  >
-                    <Send className="w-4 h-4" />
-                    <span className="hidden sm:inline">Enviar</span>
-                  </button>
+                <form onSubmit={handleSendMessage} className="space-y-1.5">
+                  <div className="flex items-center gap-2.5">
+                    <input
+                      type="text"
+                      disabled={!canReply || isSending}
+                      placeholder={
+                        canReply
+                          ? `Escreva sua mensagem como ${extractConsultantName(user?.name)}...`
+                          : 'Assuma o atendimento para responder...'
+                      }
+                      value={inputText}
+                      onChange={(e) => setInputText(e.target.value)}
+                      className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!canReply || isSending || !inputText.trim()}
+                      className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors shrink-0"
+                    >
+                      <Send className="w-4 h-4" />
+                      <span className="hidden sm:inline">Enviar</span>
+                    </button>
+                  </div>
+                  {canReply && (
+                    <div className="flex items-center justify-between text-[11px] text-slate-500 px-1 select-none">
+                      <label className="flex items-center gap-1.5 cursor-pointer hover:text-slate-800 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={includeAgentPrefix}
+                          onChange={(e) => setIncludeAgentPrefix(e.target.checked)}
+                          className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                        />
+                        <span>
+                          Identificar como <strong className="text-emerald-700 font-semibold">{extractConsultantName(user?.name)}</strong> antes da mensagem
+                        </span>
+                      </label>
+                      <span className="text-[10px] text-slate-400 hidden sm:inline">
+                        Exibido ao cliente no WhatsApp
+                      </span>
+                    </div>
+                  )}
                 </form>
               </div>
             ) : (
@@ -678,7 +1042,7 @@ export const ChatDeskView: React.FC = () => {
       {/* COLUNA 3 — INFORMAÇÕES DO CLIENTE E PARÂMETROS DA VIAGEM                  */}
       {/* ========================================================================= */}
       {selectedConv && (
-        <div className="w-full md:w-72 lg:w-80 bg-white border-l border-slate-200 p-5 shrink-0 overflow-y-auto space-y-6">
+        <div className="w-full md:w-72 lg:w-80 bg-white border-l border-slate-200 p-5 shrink-0 overflow-y-auto space-y-6 h-full min-h-0">
           <div>
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6">
               Perfil do Cliente
@@ -696,26 +1060,52 @@ export const ChatDeskView: React.FC = () => {
             </div>
           </div>
 
-          {/* Travel Parameters (Editable by Attendants) */}
+          {/* Travel Parameters (Automatic & Editable) */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] text-slate-400 font-bold uppercase">Parâmetros de Viagem</p>
-              {!editingTravelInfo ? (
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] text-slate-400 font-bold uppercase">Parâmetros de Viagem</p>
+                {selectedConv.customer?.destination_interest && (
+                  <span className="bg-emerald-50 text-emerald-700 text-[9px] px-1.5 py-0.2 rounded font-bold border border-emerald-200">
+                    Auto
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setEditingTravelInfo(true)}
-                  className="text-xs text-blue-600 hover:text-blue-700 font-semibold"
+                  type="button"
+                  onClick={handleTriggerAutoExtraction}
+                  disabled={isAutoExtracting}
+                  className="text-[11px] text-cyan-600 hover:text-cyan-700 font-semibold flex items-center gap-1 cursor-pointer"
+                  title="Detectar parâmetros automaticamente a partir das mensagens"
                 >
-                  Editar
+                  <Sparkles className={`w-3 h-3 ${isAutoExtracting ? 'animate-spin' : ''}`} />
+                  <span>Auto-detectar</span>
                 </button>
-              ) : (
-                <button
-                  onClick={handleSaveTravelInfo}
-                  className="text-xs font-bold text-emerald-600 hover:text-emerald-700"
-                >
-                  Salvar
-                </button>
-              )}
+                {!editingTravelInfo ? (
+                  <button
+                    onClick={() => setEditingTravelInfo(true)}
+                    className="text-xs text-blue-600 hover:text-blue-700 font-semibold"
+                  >
+                    Editar
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleSaveTravelInfo}
+                    className="text-xs font-bold text-emerald-600 hover:text-emerald-700"
+                  >
+                    Salvar
+                  </button>
+                )}
+              </div>
             </div>
+
+            {autoExtractedSuccess && (
+              <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-lg text-[11px] text-emerald-800 flex items-center gap-1.5 animate-fadeIn">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>Parâmetros de viagem atualizados automaticamente!</span>
+              </div>
+            )}
 
             {editingTravelInfo ? (
               <div className="space-y-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs">
@@ -898,33 +1288,128 @@ export const ChatDeskView: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL DE ENCERRAMENTO */}
+      {/* MODAL DE ENCERRAMENTO E CONVERSÃO DE VENDAS */}
       {closeModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
-            <h3 className="text-base font-bold text-slate-800 mb-2 flex items-center gap-2">
-              <XCircle className="w-4 h-4 text-rose-600" />
-              Encerrar Atendimento
-            </h3>
-            <p className="text-xs text-slate-500 mb-4 leading-relaxed">
-              Tem certeza que deseja encerrar o atendimento com <strong className="text-slate-800">{selectedConv?.customer?.name}</strong>?
-              O histórico continuará salvo no banco de dados e poderá ser consultado a qualquer momento.
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-emerald-600" />
+                Finalizar Atendimento & Conversão
+              </h3>
+              <button
+                onClick={() => setCloseModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600">
+              Finalizando conversa com <strong className="text-slate-900">{selectedConv?.customer?.name}</strong>.
+              Informe o resultado comercial para alimentar o relatório de conversão de vendas da agência.
             </p>
 
-            <div className="flex justify-end gap-2 pt-2 text-xs">
+            {/* Outcome Selection */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-2">
+                A venda foi bem-sucedida?
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setSaleOutcome('WON')}
+                  className={`p-3 rounded-xl border flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    saleOutcome === 'WON'
+                      ? 'bg-emerald-50 border-emerald-500 text-emerald-800 shadow-xs ring-2 ring-emerald-500/20'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  <ThumbsUp className={`w-5 h-5 ${saleOutcome === 'WON' ? 'text-emerald-600' : 'text-slate-400'}`} />
+                  <span className="text-xs font-bold">Sim, Venda Concluída!</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSaleOutcome('LOST')}
+                  className={`p-3 rounded-xl border flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    saleOutcome === 'LOST'
+                      ? 'bg-rose-50 border-rose-500 text-rose-800 shadow-xs ring-2 ring-rose-500/20'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  <ThumbsDown className={`w-5 h-5 ${saleOutcome === 'LOST' ? 'text-rose-600' : 'text-slate-400'}`} />
+                  <span className="text-xs font-bold">Não / Não Fechou</span>
+                </button>
+              </div>
+            </div>
+
+            {/* If WON: Sale Value */}
+            {saleOutcome === 'WON' && (
+              <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-2">
+                <label className="block text-xs font-semibold text-emerald-900">
+                  Valor Total da Venda Fechada (R$):
+                </label>
+                <input
+                  type="text"
+                  value={saleValueInput}
+                  onChange={(e) => setSaleValueInput(e.target.value)}
+                  placeholder="ex: R$ 6.500,00"
+                  className="w-full bg-white border border-emerald-300 rounded-lg px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <p className="text-[11px] text-emerald-700">
+                  Este valor será somado ao volume total de vendas e faturamento no relatório da agência.
+                </p>
+              </div>
+            )}
+
+            {/* If LOST: Reason */}
+            {saleOutcome === 'LOST' && (
+              <div className="p-3.5 bg-rose-50/70 border border-rose-200 rounded-xl space-y-2">
+                <label className="block text-xs font-semibold text-rose-900">
+                  Motivo da perda / não conversão:
+                </label>
+                <select
+                  value={lostReason}
+                  onChange={(e) => setLostReason(e.target.value)}
+                  className="w-full bg-white border border-rose-300 rounded-lg px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                >
+                  <option value="Orçamento acima do esperado">Orçamento acima do esperado pelo cliente</option>
+                  <option value="Datas incompatíveis / sem voos">Datas incompatíveis ou falta de vagas nos voos</option>
+                  <option value="Cliente comprou em outra agência">Cliente comprou em outra agência / concorrente</option>
+                  <option value="Cliente desistiu da viagem">Cliente desistiu da viagem</option>
+                  <option value="Cliente parou de responder">Cliente parou de responder no WhatsApp</option>
+                  <option value="Apenas cotação prévia / informativa">Apenas cotação prévia / informativa</option>
+                  <option value="Outro">Outro motivo</option>
+                </select>
+
+                {lostReason === 'Outro' && (
+                  <input
+                    type="text"
+                    value={customLostReason}
+                    onChange={(e) => setCustomLostReason(e.target.value)}
+                    placeholder="Especifique o motivo da perda..."
+                    className="w-full bg-white border border-rose-300 rounded-lg px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500 mt-2"
+                  />
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 text-xs">
               <button
                 type="button"
                 onClick={() => setCloseModalOpen(false)}
-                className="px-3.5 py-1.5 text-slate-500 hover:text-slate-800 font-medium"
+                className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium cursor-pointer"
               >
                 Cancelar
               </button>
               <button
                 type="button"
                 onClick={handleConfirmClose}
-                className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg shadow-xs transition-colors"
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2"
               >
-                Sim, Encerrar
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <span>Salvar & Encerrar</span>
               </button>
             </div>
           </div>

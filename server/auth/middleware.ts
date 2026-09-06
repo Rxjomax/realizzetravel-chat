@@ -20,6 +20,11 @@ export function authenticateToken(req: AuthenticatedRequest, res: Response, next
     return;
   }
 
+  // Normalize organization_id to org_realizzetravel
+  if (!payload.organization_id || payload.organization_id === 'org_voolivre') {
+    payload.organization_id = 'org_realizzetravel';
+  }
+
   req.user = payload;
   next();
 }

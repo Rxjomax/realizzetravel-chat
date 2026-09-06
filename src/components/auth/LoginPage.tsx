@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { Plane, Eye, EyeOff, Lock, Mail, AlertCircle, CheckCircle2, ShieldCheck, Headphones, Compass } from 'lucide-react';
+import { Eye, EyeOff, Lock, Mail, AlertCircle, CheckCircle2, ShieldCheck, Compass } from 'lucide-react';
+import { RealizzeLogo } from '../common/RealizzeLogo';
 
 export const LoginPage: React.FC = () => {
   const { login, error, clearError } = useAuth();
@@ -28,12 +29,6 @@ export const LoginPage: React.FC = () => {
     }
   };
 
-  const handleQuickLogin = (demoEmail: string) => {
-    setEmail(demoEmail);
-    setPassword('viagens123');
-    clearError();
-  };
-
   const handleForgotSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setForgotSuccess('Um link de redefinição de senha foi enviado para o seu e-mail cadastrado.');
@@ -47,15 +42,13 @@ export const LoginPage: React.FC = () => {
     <div className="min-h-screen bg-[#F8FAFC] text-slate-800 flex flex-col justify-center items-center px-4 sm:px-6 lg:px-8 relative overflow-hidden font-sans">
       <div className="w-full max-w-md z-10">
         {/* Header Branding */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-xl bg-blue-50 border border-blue-100 text-blue-600 mb-3 shadow-xs">
-            <Plane className="w-7 h-7 -rotate-45" />
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-800">
-            RealizzeTravel Viagens
+        <div className="text-center mb-7">
+          <RealizzeLogo size={80} className="mx-auto mb-3 shadow-md rounded-2xl" />
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900">
+            RealizzeTravel
           </h1>
-          <p className="text-sm text-slate-500 mt-1 flex items-center justify-center gap-1.5">
-            <Compass className="w-4 h-4 text-blue-600" />
+          <p className="text-xs text-slate-500 mt-1 flex items-center justify-center gap-1.5 font-medium">
+            <Compass className="w-3.5 h-3.5 text-amber-600" />
             Central de Atendimento Multicanal WhatsApp
           </p>
         </div>
@@ -162,72 +155,10 @@ export const LoginPage: React.FC = () => {
             </button>
           </form>
 
-          {/* Quick Demo Logins for fast testing of multiple attendants & roles */}
-          <div className="mt-6 pt-5 border-t border-slate-100">
-            <p className="text-xs font-semibold text-slate-500 mb-2.5 text-center">
-              Acesso rápido para testes de concorrência e perfis (senha: <code className="text-blue-600">viagens123</code>):
+          <div className="mt-6 pt-4 border-t border-slate-100 text-center">
+            <p className="text-xs text-slate-400">
+              Acesso restrito à equipe e consultores credenciados da RealizzeTravel.
             </p>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('admin@realizzetravel.com.br')}
-                className="p-2.5 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-left transition-colors flex items-center gap-2"
-              >
-                <ShieldCheck className="w-4 h-4 text-amber-500 shrink-0" />
-                <div className="truncate">
-                  <div className="font-bold text-slate-800">Carlos (Admin)</div>
-                  <div className="text-[10px] text-slate-500 truncate">admin@realizzetravel...</div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('supervisor@realizzetravel.com.br')}
-                className="p-2.5 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-left transition-colors flex items-center gap-2"
-              >
-                <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
-                <div className="truncate">
-                  <div className="font-bold text-slate-800">Renata (Superv.)</div>
-                  <div className="text-[10px] text-slate-500 truncate">supervisor@...</div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('joao@realizzetravel.com.br')}
-                className="p-2.5 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-left transition-colors flex items-center gap-2"
-              >
-                <Headphones className="w-4 h-4 text-emerald-600 shrink-0" />
-                <div className="truncate">
-                  <div className="font-bold text-slate-800">João (Atendente)</div>
-                  <div className="text-[10px] text-slate-500 truncate">joao@realizzetravel...</div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('maria@realizzetravel.com.br')}
-                className="p-2.5 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-left transition-colors flex items-center gap-2"
-              >
-                <Headphones className="w-4 h-4 text-emerald-600 shrink-0" />
-                <div className="truncate">
-                  <div className="font-bold text-slate-800">Maria (Atendente)</div>
-                  <div className="text-[10px] text-slate-500 truncate">maria@realizzetravel...</div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('pedro@realizzetravel.com.br')}
-                className="col-span-2 p-2.5 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-left transition-colors flex items-center gap-2 justify-center"
-              >
-                <Headphones className="w-4 h-4 text-emerald-600 shrink-0" />
-                <div>
-                  <span className="font-bold text-slate-800">Pedro Souza (Atendente 3)</span>
-                  <span className="text-[11px] text-slate-500 ml-2">pedro@realizzetravel.com.br</span>
-                </div>
-              </button>
-            </div>
           </div>
         </div>
       </div>

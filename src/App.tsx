@@ -7,6 +7,7 @@ import { ChatDeskView } from './components/chat/ChatDeskView';
 import { CustomersView } from './components/customers/CustomersView';
 import { ReportsView } from './components/reports/ReportsView';
 import { AgentsView } from './components/agents/AgentsView';
+import { WhatsAppGroupsView } from './components/groups/WhatsAppGroupsView';
 import { WhatsAppConfigView } from './components/whatsapp/WhatsAppConfigView';
 import { SettingsView } from './components/settings/SettingsView';
 import { Plane } from 'lucide-react';
@@ -36,12 +37,14 @@ const MainContent: React.FC = () => {
         return <DashboardView onNavigateToChat={() => setCurrentTab('chat')} />;
       case 'chat':
         return <ChatDeskView />;
+      case 'groups':
+        return <WhatsAppGroupsView />;
       case 'customers':
         return <CustomersView />;
       case 'reports':
         return <ReportsView />;
       case 'agents':
-        return <AgentsView />;
+        return <AgentsView currentUser={user} onUserUpdated={updateUser} />;
       case 'whatsapp':
         return <SettingsView currentUser={user} onUserUpdated={updateUser} initialTab="whatsapp" onNavigateToChat={() => setCurrentTab('chat')} />;
       case 'settings':
