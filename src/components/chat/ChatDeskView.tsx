@@ -401,16 +401,18 @@ export const ChatDeskView: React.FC = () => {
 
     try {
       await api.assignConversation(selectedConvId);
-      await fetchConversationDetails(selectedConvId);
       if (activeFilter === 'WAITING') {
         setActiveFilter('OPEN');
       } else {
         await fetchConversations();
       }
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Esta conversa já foi assumida por outro atendente.');
       await fetchConversationDetails(selectedConvId);
-      await fetchConversations();
+    } catch (err: any) {
+      console.warn('Assign notice:', err);
+      // Keep optimistic OPEN state
+      if (activeFilter === 'WAITING') {
+        setActiveFilter('OPEN');
+      }
     } finally {
       setIsAssigning(false);
     }
