@@ -33,13 +33,17 @@ import { extractTravelParameters, hasExtractedAnyInfo, parseBudgetValue } from '
 import { formatPhoneNumber } from '../../utils/formatters';
 
 export function extractConsultantName(fullName?: string): string {
-  if (!fullName) return 'Consultor';
+  if (!fullName) return 'Atendente';
   const parenMatch = fullName.match(/\(([^)]+)\)/);
+  // If format is "Carlos Santos (Administrador)", we can use "Carlos Santos" or "Carlos"
+  const cleanName = fullName.replace(/\s*\([^)]*\)/g, '').trim();
+  if (cleanName) {
+    return cleanName;
+  }
   if (parenMatch && parenMatch[1]) {
     return parenMatch[1].trim();
   }
-  const clean = fullName.replace(/\s*\([^)]*\)/g, '').trim();
-  return clean || fullName;
+  return fullName;
 }
 
 export const ChatDeskView: React.FC = () => {

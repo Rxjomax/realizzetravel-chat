@@ -411,7 +411,12 @@ export class WhatsAppService {
         } else if (body.contact || body.contacts) {
           msgText = '[Contato compartilhado]';
         } else {
-          msgText = 'Mensagem recebida';
+          // No valid message content
+          return;
+        }
+
+        if (!msgText || !msgText.trim()) {
+          return;
         }
 
         const msgType = body.image ? 'image' : body.document ? 'document' : body.audio ? 'audio' : 'text';

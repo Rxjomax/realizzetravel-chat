@@ -348,7 +348,18 @@ class ApiService {
       if (storedMsgs) {
         const parsed = JSON.parse(storedMsgs);
         if (parsed && typeof parsed === 'object') {
-          this.localMessages = { ...this.localMessages, ...parsed };
+          // Filter out generic status placeholders
+          const cleanedMsgs: Record<string, Message[]> = {};
+          for (const key in parsed) {
+            if (Array.isArray(parsed[key])) {
+              cleanedMsgs[key] = parsed[key].filter(
+                (m: Message) =>
+                  m.content !== 'Mensagem recebida pelo WhatsApp' &&
+                  m.content !== 'Mensagem recebida'
+              );
+            }
+          }
+          this.localMessages = { ...this.localMessages, ...cleanedMsgs };
         }
       }
     } catch {}
@@ -607,24 +618,44 @@ class ApiService {
     const cleanPhone = String(rawPhone).replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
     if (!cleanPhone || cleanPhone.length < 8) return null;
 
+    const isStatusOrDelivery =
+      body.type === 'DeliveryCallback' ||
+      body.type === 'MessageStatusCallback' ||
+      body.deliveryStatus !== undefined ||
+      body.messageStatus !== undefined ||
+      (body.status && !body.text && !body.message && !body.image && !body.audio);
+
+    if (isStatusOrDelivery) {
+      return null;
+    }
+
     const senderName = body.senderName || body.pushName || body.chatName || `Cliente (+${cleanPhone})`;
     let msgText = '';
     if (typeof body.text === 'string' && body.text.trim()) {
       msgText = body.text.trim();
-    } else if (body.text?.message) {
-      msgText = body.text.message;
+    } else if (body.text?.message && String(body.text.message).trim()) {
+      msgText = String(body.text.message).trim();
     } else if (typeof body.message === 'string' && body.message.trim()) {
       msgText = body.message.trim();
-    } else if (body.message?.conversation) {
-      msgText = body.message.conversation;
-    } else if (body.message?.extendedTextMessage?.text) {
-      msgText = body.message.extendedTextMessage.text;
-    } else if (body.caption) {
-      msgText = body.caption;
-    } else if (body.body) {
-      msgText = body.body;
-    } else {
-      msgText = 'Mensagem recebida pelo WhatsApp';
+    } else if (body.message?.conversation && String(body.message.conversation).trim()) {
+      msgText = String(body.message.conversation).trim();
+    } else if (body.message?.extendedTextMessage?.text && String(body.message.extendedTextMessage.text).trim()) {
+      msgText = String(body.message.extendedTextMessage.text).trim();
+    } else if (body.caption && String(body.caption).trim()) {
+      msgText = String(body.caption).trim();
+    } else if (body.image) {
+      msgText = body.image.caption || '[Imagem]';
+    } else if (body.audio) {
+      msgText = '[Áudio]';
+    } else if (body.document) {
+      msgText = body.document.fileName ? `[Documento: ${body.document.fileName}]` : '[Documento]';
+    } else if (body.body && String(body.body).trim()) {
+      msgText = String(body.body).trim();
+    }
+
+    // Do NOT generate a message if there is no real content
+    if (!msgText || msgText === 'Mensagem recebida pelo WhatsApp' || msgText === 'Mensagem recebida') {
+      return null;
     }
 
     const msgId = body.messageId || body.zaapId || body.id || `msg_in_${Date.now()}`;
