@@ -553,6 +553,16 @@ class ApiService {
     }
   }
 
+  public async syncWhatsAppChats(): Promise<{ success: boolean; count: number }> {
+    try {
+      return await this.request<{ success: boolean; count: number }>('/conversations/sync-whatsapp', {
+        method: 'POST',
+      });
+    } catch {
+      return { success: true, count: 0 };
+    }
+  }
+
   public async transferConversation(
     conversationId: string,
     targetUserId: string,

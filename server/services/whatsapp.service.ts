@@ -343,6 +343,30 @@ export class WhatsAppService {
       return;
     }
 
+    // Handle error or delivery status updates from Z-API / WhatsApp
+    const messageStatus = body.status || body.messageStatus || body.deliveryStatus;
+    const isDeliveryCallback = event.toLowerCase().includes('delivery') || body.type === 'DeliveryCallback' || body.type === 'MessageStatusCallback';
+    
+    if (body.error || isDeliveryCallback || (messageStatus && !body.text && !body.message && !body.image && !body.document && !body.audio)) {
+      const waMsgId = body.messageId || body.zaapId || body.id;
+      if (body.error) {
+        console.warn(`⚠️ WhatsApp Delivery Notice for +${body.phone || 'unknown'}: ${body.error}`);
+      }
+      if (waMsgId) {
+        const newStatus = body.error ? 'failed' : (messageStatus ? String(messageStatus).toLowerCase() : 'delivered');
+        try {
+          dbRun(
+            'UPDATE messages SET status = ? WHERE whatsapp_message_id = ? OR id = ?',
+            [newStatus, waMsgId, waMsgId]
+          );
+          broadcastEvent('message:status', { messageId: waMsgId, status: newStatus }, targetOrg);
+        } catch {
+          // Ignore DB status update errors
+        }
+      }
+      return;
+    }
+
     // Z-API specific on-message payload & general webhook message payloads
     const rawPhone = body.phone || body.senderPhone || body.from || body.chatId || data?.phone || data?.from || data?.remoteJid;
     const isFromMe = body.fromMe === true || body.isMyMessage === true || data?.key?.fromMe === true;
@@ -818,12 +842,25 @@ export class WhatsAppService {
           [organizationId, customer.id]
         );
 
+        const convId = conversation ? conversation.id : `cnv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
         if (!conversation) {
-          const convId = `cnv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
           dbRun(
             `INSERT INTO conversations (id, organization_id, customer_id, status, priority, created_at, updated_at, last_message_at)
              VALUES (?, ?, ?, 'WAITING', 'MEDIUM', ?, ?, ?)`,
             [convId, organizationId, customer.id, lastMsgTime, now, lastMsgTime]
+          );
+        }
+
+        // Also ensure the last message from Z-API chat item is in messages table
+        const lastText = item.lastMessage || item.message || item.text?.message || item.body || (item.unread > 0 ? 'Mensagem recente recebida' : 'Conversa sincronizada');
+        const existingMsg = dbGet<any>('SELECT id FROM messages WHERE conversation_id = ? LIMIT 1', [convId]);
+        if (!existingMsg && lastText) {
+          const msgId = `msg_sync_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+          dbRun(
+            `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, status, created_at)
+             VALUES (?, ?, ?, 'CUSTOMER', ?, 'text', ?, 'delivered', ?)`,
+            [msgId, organizationId, convId, customer.id, lastText, lastMsgTime]
           );
         }
 

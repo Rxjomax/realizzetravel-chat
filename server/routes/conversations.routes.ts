@@ -196,12 +196,34 @@ conversationsRouter.get('/reports/commercial', authenticateToken, (req: Authenti
   }
 });
 
+// POST /api/conversations/sync-whatsapp - Force sync recent chats directly from Z-API
+conversationsRouter.post('/sync-whatsapp', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const orgId = req.user!.organization_id;
+    const result = await WhatsAppService.syncZapiRecentChats(orgId);
+    res.json({ success: true, count: result.count });
+  } catch (error: any) {
+    console.error('Error syncing whatsapp:', error);
+    res.status(500).json({ error: error.message || 'Erro ao sincronizar WhatsApp' });
+  }
+});
+
 // GET /api/conversations - List conversations with filters and search
-conversationsRouter.get('/', authenticateToken, (req: AuthenticatedRequest, res: Response): void => {
+conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const orgId = req.user!.organization_id;
     const { status, filter, search } = req.query;
     const userId = req.user!.id;
+
+    // Check if we have 0 conversations in DB; if so, trigger a fast background sync
+    const totalConvCount = dbGet<{ count: number }>(
+      'SELECT COUNT(*) as count FROM conversations WHERE organization_id = ?',
+      [orgId]
+    )?.count || 0;
+
+    if (totalConvCount === 0) {
+      await WhatsAppService.syncZapiRecentChats(orgId).catch(() => {});
+    }
 
     // Regra de Negócio: Se o atendente não interagir no chat em 1 dia (24h), o cliente volta para aguardando
     try {

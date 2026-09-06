@@ -705,9 +705,18 @@ export const ChatDeskView: React.FC = () => {
         {/* Conversation List */}
         <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
           {conversations.length === 0 ? (
-            <div className="p-8 text-center text-slate-400 text-xs">
-              <Filter className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-              Nenhuma conversa encontrada neste filtro.
+            <div className="p-8 text-center text-slate-500 text-xs space-y-3">
+              <Filter className="w-8 h-8 mx-auto text-slate-300" />
+              <p className="font-medium">Nenhuma conversa encontrada na aba "{activeFilter === 'WAITING' ? 'Aguardando' : activeFilter === 'OPEN' ? 'Em Atendimento' : activeFilter === 'MY' ? 'Minhas' : 'Filtro'}".</p>
+              {activeFilter !== 'ALL' && (
+                <button
+                  type="button"
+                  onClick={() => setActiveFilter('ALL')}
+                  className="px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                >
+                  Ver Todas as Conversas
+                </button>
+              )}
             </div>
           ) : (
             conversations.map((c) => {
