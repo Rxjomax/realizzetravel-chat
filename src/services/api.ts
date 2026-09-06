@@ -23,6 +23,11 @@ class ApiService {
         this.currentUser = JSON.parse(storedUser);
       } catch {}
     }
+    // Clean out any stale local cache from previous client fallbacks
+    try {
+      localStorage.removeItem('realizze_local_convs');
+      localStorage.removeItem('realizze_local_msgs');
+    } catch {}
     this.initLocalStore();
   }
 
