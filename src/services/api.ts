@@ -563,6 +563,10 @@ class ApiService {
     }
   }
 
+  public async syncZapiChats(): Promise<{ success: boolean; count: number }> {
+    return this.syncWhatsAppChats();
+  }
+
   public async transferConversation(
     conversationId: string,
     targetUserId: string,

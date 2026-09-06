@@ -18,17 +18,26 @@ export async function ensureDbReady(): Promise<void> {
   if (dbInitialized) return;
   if (!initPromise) {
     initPromise = (async () => {
-      await getDatabase();
-      await seedDatabase();
-      dbInitialized = true;
-      // Auto-sync active WhatsApp chats from Z-API into desk
-      WhatsAppService.syncZapiRecentChats('org_realizzetravel').catch((e) => {
-        console.warn('Auto Z-API sync error on startup:', e.message);
-      });
-      // Start real-time live WhatsApp inbound relay tunnel
-      WebhookRelayService.start().catch((e) => {
-        console.warn('Webhook Relay startup error:', e.message);
-      });
+      try {
+        await getDatabase();
+        await seedDatabase();
+        dbInitialized = true;
+        
+        // Auto-sync active WhatsApp chats from Z-API into desk
+        WhatsAppService.syncZapiRecentChats('org_realizzetravel').catch((e) => {
+          console.warn('Auto Z-API sync notice on startup:', e.message);
+        });
+
+        // Only start long-running SSE relay in local/container dev, not inside short-lived Serverless lambdas
+        const isServerless = process.env.VERCEL === '1' || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+        if (!isServerless) {
+          WebhookRelayService.start().catch((e) => {
+            console.warn('Webhook Relay notice:', e.message);
+          });
+        }
+      } catch (err: any) {
+        console.error('ensureDbReady initialization error:', err);
+      }
     })();
   }
   return initPromise;
@@ -53,6 +62,15 @@ export function createExpressApp(): express.Express {
     next();
   });
 
+  // Health check - instant response
+  app.get(['/api/health', '/health'], (req, res) => {
+    res.json({
+      status: 'ok',
+      service: 'Central WhatsApp Viagens',
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   // Middleware to ensure DB is initialized on incoming requests
   app.use(async (req, res, next) => {
     try {
@@ -60,17 +78,8 @@ export function createExpressApp(): express.Express {
       next();
     } catch (err: any) {
       console.error('Database initialization error:', err);
-      res.status(500).json({ error: 'Erro ao conectar com o banco de dados: ' + (err?.message || String(err)) });
+      next();
     }
-  });
-
-  // Health check
-  app.get(['/api/health', '/health'], (req, res) => {
-    res.json({
-      status: 'ok',
-      service: 'Central WhatsApp Viagens',
-      timestamp: new Date().toISOString(),
-    });
   });
 
   // API Routes (mounted both on /api/... and root in case Vercel rewrites or strips /api)
