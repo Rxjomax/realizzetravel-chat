@@ -372,15 +372,16 @@ export class WhatsAppService {
     const isFromMe = body.fromMe === true || body.isMyMessage === true || data?.key?.fromMe === true;
     const isGroupMsg = body.isGroup === true || String(rawPhone || '').includes('-') || String(rawPhone || '').endsWith('@g.us');
 
-    if (rawPhone && !isGroupMsg && !isFromMe) {
+    if (rawPhone && !isGroupMsg) {
       const cleanPhone = String(rawPhone).replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
       if (cleanPhone && cleanPhone.length >= 8) {
-        const senderName =
-          body.senderName ||
-          body.pushName ||
-          body.chatName ||
-          data?.pushName ||
-          `Cliente WhatsApp (${cleanPhone.slice(-4)})`;
+        const senderName = isFromMe
+          ? (body.senderName || 'Atendente (WhatsApp)')
+          : (body.senderName ||
+             body.pushName ||
+             body.chatName ||
+             data?.pushName ||
+             `Cliente WhatsApp (${cleanPhone.slice(-4)})`);
 
         // Extract message text / content
         let msgText = '';
@@ -421,9 +422,9 @@ export class WhatsAppService {
 
         const msgType = body.image ? 'image' : body.document ? 'document' : body.audio ? 'audio' : 'text';
         const mediaUrl = body.image?.imageUrl || body.document?.documentUrl || body.audio?.audioUrl || null;
-        const msgId = body.messageId || body.zaapId || body.id || `zapi_in_${Date.now()}`;
+        const msgId = body.messageId || body.zaapId || body.id || `zapi_msg_${Date.now()}`;
 
-        console.log(`💬 Processando mensagem recebida de +${cleanPhone}: "${msgText}"`);
+        console.log(`💬 Processando mensagem ${isFromMe ? 'enviada (atendente)' : 'recebida (cliente)'} +${cleanPhone}: "${msgText}"`);
 
         this.processInboundMessage({
           organizationId: targetOrg,
@@ -433,6 +434,7 @@ export class WhatsAppService {
           messageType: msgType,
           mediaUrl,
           whatsappMessageId: msgId,
+          senderType: isFromMe ? 'AGENT' : 'CUSTOMER',
         });
         return;
       }
@@ -516,8 +518,10 @@ export class WhatsAppService {
     messageType: string;
     mediaUrl?: string | null;
     whatsappMessageId?: string;
+    senderType?: 'CUSTOMER' | 'AGENT' | 'SYSTEM';
   }): { conversationId: string; status: string; assignedUserId: string | null; autoReplySent?: string } {
     const { phone, name, content, messageType, mediaUrl, whatsappMessageId } = params;
+    const senderType = params.senderType || 'CUSTOMER';
     const organizationId = this.resolveOrganizationId(params.organizationId);
     const now = new Date().toISOString();
     const settings = this.getAgencySettings(organizationId);
@@ -528,8 +532,6 @@ export class WhatsAppService {
     let convStatus: 'WAITING' | 'ASSIGNED' = 'WAITING';
     let isNewConv = false;
     let autoReplyMessageContent: string | null = null;
-    let autoReplyMsgId = '';
-    let autoReplyTime = '';
     let customerObj: any = null;
 
     dbTransaction(() => {
@@ -641,40 +643,60 @@ export class WhatsAppService {
         ]);
       }
 
-      // 3. Insert customer message
+      // Check for duplicate message
+      if (whatsappMessageId) {
+        const dupByWaId = dbGet<any>(
+          'SELECT id FROM messages WHERE whatsapp_message_id = ? LIMIT 1',
+          [whatsappMessageId]
+        );
+        if (dupByWaId) {
+          return;
+        }
+      }
+      const dupByContent = dbGet<any>(
+        'SELECT id FROM messages WHERE conversation_id = ? AND content = ? LIMIT 1',
+        [conversation.id, content]
+      );
+      if (dupByContent && content !== 'Conversa sincronizada') {
+        return;
+      }
+
+      // 3. Insert message
       const msgId = `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+      const dbSenderType = senderType;
+      const dbSenderId = senderType === 'AGENT' ? (conversation.assigned_user_id || 'usr_admin') : customer.id;
+      const dbStatus = senderType === 'AGENT' ? 'sent' : 'delivered';
+
       dbRun(
         `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, media_url, whatsapp_message_id, status, created_at)
-         VALUES (?, ?, ?, 'CUSTOMER', ?, ?, ?, ?, ?, 'delivered', ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           msgId,
           organizationId,
           conversation.id,
-          customer.id,
+          dbSenderType,
+          dbSenderId,
           messageType,
           content,
           mediaUrl || null,
           whatsappMessageId || `wamid_${Date.now()}`,
+          dbStatus,
           now,
         ]
       );
 
-      // 4. Inbound message processed
-      // Auto-reply automated outgoing WhatsApp message is DISABLED to prevent sending unsolicited messages to clients
-      autoReplyMessageContent = null;
-
-      // Customer message payload
-      const customerMsgPayload = {
+      // Customer/Agent message payload
+      const msgPayload = {
         id: msgId,
         organization_id: organizationId,
         conversation_id: conversation.id,
-        sender_type: 'CUSTOMER',
-        sender_id: customer.id,
+        sender_type: dbSenderType,
+        sender_id: dbSenderId,
         message_type: messageType,
         content,
         media_url: mediaUrl || null,
         whatsapp_message_id: whatsappMessageId,
-        status: 'delivered',
+        status: dbStatus,
         created_at: now,
       };
 
@@ -713,7 +735,7 @@ export class WhatsAppService {
           'message:new',
           {
             conversationId: conversation.id,
-            message: customerMsgPayload,
+            message: msgPayload,
           },
           organizationId
         );
@@ -799,15 +821,17 @@ export class WhatsAppService {
         }
 
         // Also ensure the last message from Z-API chat item is in messages table
-        const lastText = item.lastMessage || item.message || item.text?.message || item.body || (item.unread > 0 ? 'Mensagem recente recebida' : 'Conversa sincronizada');
-        const existingMsg = dbGet<any>('SELECT id FROM messages WHERE conversation_id = ? LIMIT 1', [convId]);
-        if (!existingMsg && lastText) {
-          const msgId = `msg_sync_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-          dbRun(
-            `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, status, created_at)
-             VALUES (?, ?, ?, 'CUSTOMER', ?, 'text', ?, 'delivered', ?)`,
-            [msgId, organizationId, convId, customer.id, lastText, lastMsgTime]
-          );
+        const lastText = item.lastMessage || item.message || item.text?.message || item.body || null;
+        if (lastText) {
+          const existingMsg = dbGet<any>('SELECT id FROM messages WHERE conversation_id = ? AND content = ? LIMIT 1', [convId, lastText]);
+          if (!existingMsg) {
+            const msgId = `msg_sync_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+            dbRun(
+              `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, status, created_at)
+               VALUES (?, ?, ?, 'CUSTOMER', ?, 'text', ?, 'delivered', ?)`,
+              [msgId, organizationId, convId, customer.id, lastText, lastMsgTime]
+            );
+          }
         }
 
         importedCount++;

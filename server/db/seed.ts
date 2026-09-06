@@ -62,6 +62,31 @@ export async function seedDatabase(): Promise<void> {
         ['usr_beatriz', 'org_realizzetravel', 'Consultor 6 (Beatriz Costa)', 'consultor6@realizzetravel.com.br', defaultPw, 'AGENT', 'ONLINE', 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=120&h=120&fit=crop&crop=face', now, now, now]
       );
     }
+
+    // Restore / ensure Camila's chat history is complete
+    const camilaConv = dbGet<any>("SELECT c.id as conv_id, cust.id as cust_id FROM conversations c JOIN customers cust ON cust.id = c.customer_id WHERE cust.name LIKE '%Camila%' OR cust.phone LIKE '%33695432727%' LIMIT 1");
+    if (camilaConv) {
+      const msgsToEnsure = [
+        { sender_type: 'CUSTOMER', sender_id: camilaConv.cust_id, content: 'que meu filho adoeceu e entrou para o antibiótico pela primeira vez e acabou que não fizemos foi nada kkkkk', time: '2026-09-06T18:44:00.000Z' },
+        { sender_type: 'CUSTOMER', sender_id: camilaConv.cust_id, content: 'foi o custo benefício mesmo. Ter q pegar voo tb..', time: '2026-09-06T18:44:30.000Z' },
+        { sender_type: 'AGENT', sender_id: 'usr_joao', content: 'Eita Camila, melhoras para o pequeno', time: '2026-09-06T20:02:00.000Z' },
+        { sender_type: 'AGENT', sender_id: 'usr_joao', content: 'Caso precise de algo, algum hotel ou ate mesmo passeio por aqui tambem voce fala', time: '2026-09-06T20:03:00.000Z' },
+        { sender_type: 'CUSTOMER', sender_id: camilaConv.cust_id, content: 'Olá! Gostaria de atendimento com a Realizze Travel para minha viagem.', time: '2026-09-06T20:03:30.000Z' },
+        { sender_type: 'AGENT', sender_id: 'usr_joao', content: '*[Consultor 1]*: Olá Camila, Tudo bem? Eu sou um dos representantes da RealizzeTravel!!! Somos especialistas em realizar sonhos, vamos iniciar sua jornada?', time: '2026-09-06T21:52:00.000Z' }
+      ];
+      for (const m of msgsToEnsure) {
+        const exists = dbGet<any>('SELECT id FROM messages WHERE conversation_id = ? AND content = ? LIMIT 1', [camilaConv.conv_id, m.content]);
+        if (!exists) {
+          const msgId = `msg_camila_${Math.random().toString(36).substring(7)}`;
+          dbRun(
+            `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, status, created_at)
+             VALUES (?, 'org_realizzetravel', ?, ?, ?, 'text', ?, 'delivered', ?)`,
+            [msgId, camilaConv.conv_id, m.sender_type, m.sender_id, m.content, m.time]
+          );
+        }
+      }
+      dbRun("DELETE FROM messages WHERE conversation_id = ? AND content = 'Conversa sincronizada'", [camilaConv.conv_id]);
+    }
   } catch (err) {
     console.warn('Notice running branding migration:', err);
   }
