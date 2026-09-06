@@ -595,6 +595,109 @@ class ApiService {
     return { message: newMsg };
   }
 
+  public handleIncomingWhatsAppWebhook(payload: any): { conversationId: string; message: Message } | null {
+    this.loadLocalStorageState();
+
+    const body = payload.body || payload;
+    const isFromMe = body.fromMe === true || body.isMyMessage === true;
+    const rawPhone = body.phone || body.senderPhone || body.from || body.chatId;
+
+    if (!rawPhone || isFromMe) return null;
+
+    const cleanPhone = String(rawPhone).replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
+    if (!cleanPhone || cleanPhone.length < 8) return null;
+
+    const senderName = body.senderName || body.pushName || body.chatName || `Cliente (+${cleanPhone})`;
+    let msgText = '';
+    if (typeof body.text === 'string' && body.text.trim()) {
+      msgText = body.text.trim();
+    } else if (body.text?.message) {
+      msgText = body.text.message;
+    } else if (typeof body.message === 'string' && body.message.trim()) {
+      msgText = body.message.trim();
+    } else if (body.message?.conversation) {
+      msgText = body.message.conversation;
+    } else if (body.message?.extendedTextMessage?.text) {
+      msgText = body.message.extendedTextMessage.text;
+    } else if (body.caption) {
+      msgText = body.caption;
+    } else if (body.body) {
+      msgText = body.body;
+    } else {
+      msgText = 'Mensagem recebida pelo WhatsApp';
+    }
+
+    const msgId = body.messageId || body.zaapId || body.id || `msg_in_${Date.now()}`;
+    const now = new Date().toISOString();
+
+    // Check if message was already processed
+    for (const cid in this.localMessages) {
+      if (this.localMessages[cid]?.some(m => m.id === msgId)) {
+        return null;
+      }
+    }
+
+    let conv = this.localConversations.find(c => c.customer?.phone?.replace(/\D/g, '') === cleanPhone);
+    let convId = conv ? conv.id : `conv_zapi_${cleanPhone}_0`;
+
+    const newMsg: Message = {
+      id: msgId,
+      organization_id: 'org_realizzetravel',
+      conversation_id: convId,
+      sender_type: 'CUSTOMER',
+      sender_id: `cust_${cleanPhone}`,
+      sender_name: senderName,
+      message_type: body.image ? 'image' : body.audio ? 'audio' : 'text',
+      media_url: body.image?.imageUrl || body.audio?.audioUrl || null,
+      content: msgText,
+      status: 'delivered',
+      created_at: now,
+    };
+
+    if (!conv) {
+      conv = {
+        id: convId,
+        organization_id: 'org_realizzetravel',
+        customer_id: `cust_${cleanPhone}`,
+        status: 'WAITING',
+        assigned_user_id: null,
+        priority: 'HIGH',
+        created_at: now,
+        updated_at: now,
+        last_message_at: now,
+        auto_requeued_inactivity: false,
+        customer: {
+          id: `cust_${cleanPhone}`,
+          organization_id: 'org_realizzetravel',
+          name: senderName,
+          phone: cleanPhone,
+          email: '',
+          destination_interest: 'Pacote de Viagem',
+          created_at: now,
+          updated_at: now,
+        },
+        last_message: newMsg,
+      };
+      this.localConversations.unshift(conv);
+    } else {
+      conv.last_message = newMsg;
+      conv.last_message_at = now;
+      conv.updated_at = now;
+      if (conv.status === 'CLOSED') {
+        conv.status = 'WAITING';
+        conv.assigned_user_id = null;
+      }
+    }
+
+    if (!this.localMessages[convId]) {
+      this.localMessages[convId] = [];
+    }
+    this.localMessages[convId].push(newMsg);
+    this.saveLocalStorageState();
+
+    return { conversationId: convId, message: newMsg };
+  }
+
   public async simulateInboundMessage(params: {
     conversationId?: string;
     phone?: string;

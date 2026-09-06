@@ -1,7 +1,10 @@
+import { api } from './api';
+
 type EventCallback = (payload: any) => void;
 
 class SocketClient {
   private ws: WebSocket | null = null;
+  private sse: EventSource | null = null;
   private listeners: Map<string, Set<EventCallback>> = new Map();
   private reconnectTimer: any = null;
   private fallbackPollTimer: any = null;
@@ -9,9 +12,52 @@ class SocketClient {
   private isExplicitlyClosed = false;
   private reconnectAttempts = 0;
 
+  constructor() {
+    this.startSseRelay();
+  }
+
+  private startSseRelay(): void {
+    if (typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+    if (this.sse) return;
+
+    try {
+      this.sse = new EventSource('https://smee.io/realizze-wa-3f8c20c51bb1');
+
+      this.sse.onmessage = (event) => {
+        try {
+          if (!event.data) return;
+          const data = JSON.parse(event.data);
+          const body = data.body || data;
+          if (body) {
+            const res = api.handleIncomingWhatsAppWebhook(body);
+            if (res) {
+              console.log('⚡ Real-time WhatsApp message received via relay:', res.message.content);
+              this.emitLocal('message:new', {
+                conversationId: res.conversationId,
+                message: res.message,
+              });
+              this.emitLocal('conversation:created', {
+                conversationId: res.conversationId,
+              });
+            }
+          }
+        } catch (err) {
+          // Ignore non-json frames
+        }
+      };
+
+      this.sse.onerror = () => {
+        // Native EventSource automatically handles reconnection
+      };
+    } catch (e) {
+      console.warn('Notice establishing SSE relay:', e);
+    }
+  }
+
   public connect(token: string): void {
     this.token = token;
     this.isExplicitlyClosed = false;
+    this.startSseRelay();
 
     if (this.ws) {
       try {
