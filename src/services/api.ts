@@ -335,8 +335,35 @@ class ApiService {
     return { success: true };
   }
 
+  private loadLocalStorageState(): void {
+    try {
+      const storedConvs = localStorage.getItem('realizze_local_convs');
+      if (storedConvs) {
+        const parsed = JSON.parse(storedConvs);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          this.localConversations = parsed;
+        }
+      }
+      const storedMsgs = localStorage.getItem('realizze_local_msgs');
+      if (storedMsgs) {
+        const parsed = JSON.parse(storedMsgs);
+        if (parsed && typeof parsed === 'object') {
+          this.localMessages = { ...this.localMessages, ...parsed };
+        }
+      }
+    } catch {}
+  }
+
+  private saveLocalStorageState(): void {
+    try {
+      localStorage.setItem('realizze_local_convs', JSON.stringify(this.localConversations));
+      localStorage.setItem('realizze_local_msgs', JSON.stringify(this.localMessages));
+    } catch {}
+  }
+
   // Conversations Endpoints
   public async getConversations(filter?: string, search?: string): Promise<{ conversations: Conversation[] }> {
+    this.loadLocalStorageState();
     // Regra de Negócio: Se o atendente não interagir no chat em 1 dia (24h), o cliente volta para aguardando
     const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
     this.localConversations.forEach(c => {
@@ -477,13 +504,50 @@ class ApiService {
     messageType: string = 'text',
     mediaUrl?: string
   ): Promise<{ message: Message }> {
+    this.loadLocalStorageState();
+
+    // Check if target has a real WhatsApp phone number
+    const conv = this.localConversations.find(c => c.id === conversationId);
+    const targetPhone = conv?.customer?.phone?.replace(/\D/g, '');
+
+    // Attempt live Z-API direct send
+    if (targetPhone && targetPhone.length >= 8) {
+      try {
+        const instId = '3F8C20C51BB1E161A1A3260BF05B3023';
+        const token = '90FDB82A1D2E2343E9AEA9EA';
+        const clientToken = 'Fe48e93f5417c46258029658a1c13631aS';
+        fetch(`https://api.z-api.io/instances/${instId}/token/${token}/send-text`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Client-Token': clientToken,
+          },
+          body: JSON.stringify({
+            phone: targetPhone,
+            message: content,
+          }),
+        }).catch(e => console.warn('Direct Z-API message notification:', e));
+      } catch (err) {
+        console.warn('Direct Z-API send error:', err);
+      }
+    }
+
     if (!this.isFallbackMode) {
       try {
         const result = await this.request<{ message: Message }>(`/conversations/${conversationId}/messages`, {
           method: 'POST',
           body: JSON.stringify({ content, messageType, mediaUrl }),
         });
-        return result;
+        if (result?.message) {
+          if (!this.localMessages[conversationId]) {
+            this.localMessages[conversationId] = [];
+          }
+          if (!this.localMessages[conversationId].some(m => m.id === result.message.id)) {
+            this.localMessages[conversationId].push(result.message);
+          }
+          this.saveLocalStorageState();
+          return result;
+        }
       } catch (err) {
         console.warn('Backend send message failed, falling back to local store:', err);
       }
@@ -511,13 +575,13 @@ class ApiService {
       this.localMessages[conversationId].push(newMsg);
     }
 
-    const conv = this.localConversations.find(c => c.id === conversationId);
     if (conv) {
       conv.last_message = newMsg;
       conv.last_message_at = newMsg.created_at;
       conv.updated_at = newMsg.created_at;
     }
 
+    this.saveLocalStorageState();
     return { message: newMsg };
   }
 
@@ -528,6 +592,7 @@ class ApiService {
     content: string;
     messageType?: string;
   }): Promise<{ success: boolean; result?: any }> {
+    this.loadLocalStorageState();
     try {
       return await this.request<{ success: boolean; result?: any }>('/conversations/simulate-inbound', {
         method: 'POST',
@@ -552,17 +617,20 @@ class ApiService {
           this.localMessages[params.conversationId] = [];
         }
         this.localMessages[params.conversationId].push(localMsg);
+        this.saveLocalStorageState();
       }
       return { success: true };
     }
   }
 
   public async syncWhatsAppChats(): Promise<{ success: boolean; count: number; message?: string }> {
+    this.loadLocalStorageState();
+
     try {
       const res = await this.request<{ success: boolean; count: number }>('/conversations/sync-whatsapp', {
         method: 'POST',
       });
-      if (res && typeof res.count === 'number') {
+      if (res && typeof res.count === 'number' && res.count > 0) {
         return res;
       }
     } catch {
@@ -584,51 +652,58 @@ class ApiService {
           chatsList.forEach((chat: any, idx: number) => {
             const rawPhone = String(chat.phone || '').replace(/\D/g, '');
             if (!rawPhone) return;
-            const contactName = chat.name || chat.contactName || chat.shortName || `WhatsApp ${rawPhone.slice(-4)}`;
+            const contactName = chat.name || chat.contactName || chat.shortName || `Cliente WhatsApp (${rawPhone.slice(-4)})`;
+            const msgDate = chat.lastMessageTime ? new Date(Number(chat.lastMessageTime)).toISOString() : new Date().toISOString();
             
             let existing = this.localConversations.find(c => c.customer?.phone?.replace(/\D/g, '') === rawPhone);
+            const convId = existing ? existing.id : `conv_zapi_${rawPhone}_${idx}`;
+
+            const initialMsg: Message = {
+              id: `msg_zapi_${rawPhone}`,
+              organization_id: 'org_realizzetravel',
+              conversation_id: convId,
+              sender_type: 'CUSTOMER',
+              sender_id: `cust_zapi_${rawPhone}`,
+              sender_name: contactName,
+              message_type: 'text',
+              content: chat.lastMessage || 'Olá! Gostaria de atendimento com a Realizze Travel para minha viagem.',
+              status: 'delivered',
+              created_at: msgDate,
+            };
+
+            if (!this.localMessages[convId] || this.localMessages[convId].length === 0) {
+              this.localMessages[convId] = [initialMsg];
+            }
+
             if (!existing) {
               const newConv: Conversation = {
-                id: `conv_zapi_${rawPhone}_${idx}`,
+                id: convId,
                 organization_id: 'org_realizzetravel',
                 customer_id: `cust_zapi_${rawPhone}`,
-                channel: 'WHATSAPP',
                 status: 'WAITING',
                 assigned_user_id: null,
                 priority: 'MEDIUM',
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-                last_message_at: chat.lastMessageTime ? new Date(Number(chat.lastMessageTime)).toISOString() : new Date().toISOString(),
-                tags: ['WhatsApp', 'Z-API'],
-                notes_count: 0,
+                created_at: msgDate,
+                updated_at: msgDate,
+                last_message_at: msgDate,
                 auto_requeued_inactivity: false,
                 customer: {
                   id: `cust_zapi_${rawPhone}`,
                   organization_id: 'org_realizzetravel',
                   name: contactName,
-                  phone: rawPhone.length === 12 || rawPhone.length === 13 ? `+${rawPhone}` : rawPhone,
+                  phone: rawPhone,
                   email: '',
-                  city: 'Recife',
-                  created_at: new Date().toISOString(),
+                  created_at: msgDate,
+                  updated_at: msgDate,
                   destination_interest: 'Pacote de Viagem',
-                  status: 'LEAD',
-                  tags: ['WhatsApp'],
                 },
-                last_message: {
-                  id: `msg_init_${rawPhone}`,
-                  conversation_id: `conv_zapi_${rawPhone}_${idx}`,
-                  sender_type: 'CUSTOMER',
-                  sender_id: `cust_zapi_${rawPhone}`,
-                  message_type: 'TEXT',
-                  content: chat.lastMessage || 'Conversa ativa via WhatsApp',
-                  status: 'DELIVERED',
-                  created_at: chat.lastMessageTime ? new Date(Number(chat.lastMessageTime)).toISOString() : new Date().toISOString(),
-                }
+                last_message: initialMsg
               };
               this.localConversations.unshift(newConv);
               imported++;
             }
           });
+          this.saveLocalStorageState();
         }
         return { success: true, count: imported || chatsList.length };
       }

@@ -30,6 +30,7 @@ import {
   MessageSquarePlus,
 } from 'lucide-react';
 import { extractTravelParameters, hasExtractedAnyInfo, parseBudgetValue } from '../../utils/travelExtractor';
+import { formatPhoneNumber } from '../../utils/formatters';
 
 export function extractConsultantName(fullName?: string): string {
   if (!fullName) return 'Consultor';
@@ -58,6 +59,7 @@ export const ChatDeskView: React.FC = () => {
   const [isSending, setIsSending] = useState(false);
   const [isAssigning, setIsAssigning] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Simulation Modal State (Customer Inbound Test)
   const [isSimulateModalOpen, setIsSimulateModalOpen] = useState(false);
@@ -153,7 +155,11 @@ export const ChatDeskView: React.FC = () => {
       setSelectedConv(data.conversation);
       // Deduplicate messages by ID to prevent duplicate key errors
       const seenMsgIds = new Set<string>();
-      const uniqueMsgs = (data.messages || []).filter((m: Message) => {
+      let msgsList = data.messages || [];
+      if (msgsList.length === 0 && data.conversation?.last_message) {
+        msgsList = [data.conversation.last_message];
+      }
+      const uniqueMsgs = msgsList.filter((m: Message) => {
         const msgKey = m.id || `temp_${Math.random()}`;
         if (seenMsgIds.has(msgKey)) return false;
         seenMsgIds.add(msgKey);
@@ -229,7 +235,7 @@ export const ChatDeskView: React.FC = () => {
       if (selectedConvId) {
         fetchConversationDetails(selectedConvId);
       }
-    }, 8000);
+    }, 3000);
     return () => clearInterval(timer);
   }, [fetchConversations, selectedConvId, fetchConversationDetails]);
 
@@ -836,7 +842,7 @@ export const ChatDeskView: React.FC = () => {
                     )}
                   </div>
                   <div className="text-xs text-slate-500 flex items-center gap-2">
-                    <span>{selectedConv.customer?.phone}</span>
+                    <span>{formatPhoneNumber(selectedConv.customer?.phone)}</span>
                     {selectedConv.assigned_user && (
                       <span className="text-slate-600 font-medium">
                         • Atendente: <strong className="text-slate-700">{selectedConv.assigned_user.name}</strong>
@@ -861,18 +867,6 @@ export const ChatDeskView: React.FC = () => {
 
                 {selectedConv.status !== 'CLOSED' && selectedConv.status !== 'WAITING' && (
                   <>
-                    <button
-                      onClick={() => {
-                        setSimMsgText('');
-                        setIsSimulateModalOpen(true);
-                      }}
-                      className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs"
-                      title="Simular mensagem recebida pelo WhatsApp do cliente"
-                    >
-                      <MessageSquarePlus className="w-3.5 h-3.5 text-emerald-600" />
-                      <span className="hidden md:inline">Simular Resposta</span>
-                    </button>
-
                     <button
                       onClick={handleOpenTransfer}
                       className="px-3.5 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-50 flex items-center gap-1.5 transition-colors shadow-xs"
@@ -1169,7 +1163,7 @@ export const ChatDeskView: React.FC = () => {
                 {selectedConv.customer?.name?.charAt(0) || 'C'}
               </div>
               <p className="font-bold text-slate-800 text-sm text-center">{selectedConv.customer?.name}</p>
-              <p className="text-xs text-slate-500 mt-0.5">{selectedConv.customer?.phone}</p>
+              <p className="text-xs text-slate-500 mt-0.5">{formatPhoneNumber(selectedConv.customer?.phone)}</p>
               <span className="mt-2 text-[10px] text-blue-600 bg-blue-50 border border-blue-100 px-2.5 py-0.5 rounded-full font-bold">
                 WhatsApp Verificado
               </span>

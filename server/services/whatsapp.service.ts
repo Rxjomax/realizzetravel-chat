@@ -97,7 +97,7 @@ export class WhatsAppService {
     }
   }
 
-  private static getCredentials(organizationId?: string): WhatsAppCredentials {
+  public static getCredentials(organizationId?: string): WhatsAppCredentials {
     const targetOrg = this.resolveOrganizationId(organizationId);
     const settingRow = dbGet<{ value: string }>(
       'SELECT value FROM settings WHERE organization_id = ? AND key = ?',
