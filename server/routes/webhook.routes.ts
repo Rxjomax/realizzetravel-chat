@@ -3,6 +3,7 @@ import { WhatsAppService } from '../services/whatsapp.service';
 
 export const webhookRouter = Router();
 
+// Match any webhook URL variants: /webhooks/zapi, /api/webhooks/zapi, /webhook/zapi, /zapi, etc.
 const WEBHOOK_PATHS = [
   '/webhooks/whatsapp',
   '/api/webhooks/whatsapp',
@@ -18,9 +19,11 @@ const WEBHOOK_PATHS = [
   '/api/webhook/evolution',
   '/zapi',
   '/api/zapi',
+  '/webhooks/*',
+  '/webhook/*',
 ];
 
-// GET - Meta Webhook Verification
+// GET - Meta Webhook Verification & Test
 webhookRouter.get(WEBHOOK_PATHS, (req: Request, res: Response): void => {
   const mode = req.query['hub.mode'] as string;
   const token = req.query['hub.verify_token'] as string;
@@ -42,7 +45,7 @@ webhookRouter.get(WEBHOOK_PATHS, (req: Request, res: Response): void => {
 webhookRouter.post(WEBHOOK_PATHS, (req: Request, res: Response): void => {
   try {
     const body = req.body;
-    console.log('📥 INCOMING WEBHOOK RECEIVED on path:', req.originalUrl || req.url);
+    console.log('📥 INCOMING WEBHOOK RECEIVED on path:', req.originalUrl || req.url, 'BODY:', JSON.stringify(body).slice(0, 300));
     WhatsAppService.handleInboundWebhook(body);
     res.status(200).json({ status: 'SUCCESS', message: 'EVENT_RECEIVED' });
   } catch (error) {

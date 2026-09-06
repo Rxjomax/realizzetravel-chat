@@ -479,3 +479,20 @@ settingsRouter.post('/whatsapp/simulate-incoming', authenticateToken, requireRol
   }
 });
 
+// POST /api/settings/whatsapp/sync-zapi - Sync recent chats from Z-API
+settingsRouter.post('/whatsapp/sync-zapi', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR', 'AGENT']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const orgId = req.user!.organization_id;
+    const result = await WhatsAppService.syncZapiRecentChats(orgId);
+    res.json({
+      success: true,
+      message: `Sincronização concluída! ${result.count} conversas foram verificadas e atualizadas do WhatsApp.`,
+      count: result.count,
+    });
+  } catch (err: any) {
+    console.error('Error syncing Z-API:', err);
+    res.status(500).json({ error: err.message || 'Erro ao sincronizar conversas do Z-API.' });
+  }
+});
+
+

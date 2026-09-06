@@ -26,6 +26,8 @@ import {
   ThumbsUp,
   ThumbsDown,
   ArrowDown,
+  RefreshCw,
+  MessageSquarePlus,
 } from 'lucide-react';
 import { extractTravelParameters, hasExtractedAnyInfo, parseBudgetValue } from '../../utils/travelExtractor';
 
@@ -56,6 +58,11 @@ export const ChatDeskView: React.FC = () => {
   const [isSending, setIsSending] = useState(false);
   const [isAssigning, setIsAssigning] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Simulation Modal State (Customer Inbound Test)
+  const [isSimulateModalOpen, setIsSimulateModalOpen] = useState(false);
+  const [simMsgText, setSimMsgText] = useState('');
+  const [isSimulating, setIsSimulating] = useState(false);
 
   // Transfer Modal State
   const [transferModalOpen, setTransferModalOpen] = useState(false);
@@ -88,6 +95,22 @@ export const ChatDeskView: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [isSyncingWhatsApp, setIsSyncingWhatsApp] = useState(false);
+
+  const handleSyncWhatsApp = async () => {
+    try {
+      setIsSyncingWhatsApp(true);
+      await api.syncZapiChats();
+      await fetchConversations();
+      if (selectedConvId) {
+        await fetchConversationDetails(selectedConvId);
+      }
+    } catch (e) {
+      console.error('Error syncing WhatsApp:', e);
+    } finally {
+      setIsSyncingWhatsApp(false);
+    }
+  };
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     if (messagesEndRef.current) {
@@ -194,6 +217,17 @@ export const ChatDeskView: React.FC = () => {
       fetchConversationDetails(selectedConvId);
     }
   }, [selectedConvId, fetchConversationDetails]);
+
+  // Periodic auto-refresh for realtime sync resilience
+  useEffect(() => {
+    const timer = setInterval(() => {
+      fetchConversations();
+      if (selectedConvId) {
+        fetchConversationDetails(selectedConvId);
+      }
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [fetchConversations, selectedConvId, fetchConversationDetails]);
 
   // Realtime listeners
   useEffect(() => {
@@ -463,6 +497,31 @@ export const ChatDeskView: React.FC = () => {
     }
   };
 
+  // Simulate Inbound Customer Message (Instant test for WhatsApp replies)
+  const handleSimulateCustomerMessage = async (customText?: string) => {
+    const textToSend = customText || simMsgText;
+    if (!textToSend.trim() || !selectedConv) return;
+    try {
+      setIsSimulating(true);
+      await api.simulateInboundMessage({
+        conversationId: selectedConv.id,
+        phone: selectedConv.customer?.phone,
+        name: selectedConv.customer?.name,
+        content: textToSend.trim(),
+      });
+      setSimMsgText('');
+      setIsSimulateModalOpen(false);
+      await fetchConversationDetails(selectedConv.id);
+      await fetchConversations();
+      setTimeout(() => scrollToBottom(), 100);
+    } catch (err: any) {
+      console.error('Error simulating customer message:', err);
+      setErrorMessage('Erro ao simular mensagem do cliente.');
+    } finally {
+      setIsSimulating(false);
+    }
+  };
+
   // Trigger auto extraction manually on demand
   const handleTriggerAutoExtraction = async () => {
     if (!selectedConv?.customer?.id || messages.length === 0) return;
@@ -576,15 +635,25 @@ export const ChatDeskView: React.FC = () => {
       <div className="w-full md:w-80 lg:w-96 bg-white border-r border-slate-200 flex flex-col shrink-0 h-full min-h-0 overflow-hidden">
         {/* Search & Filter Header */}
         <div className="p-4 border-b border-slate-100 space-y-3">
-          <div className="relative">
-            <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Pesquisar cliente, telefone..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-            />
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Pesquisar cliente, telefone..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              />
+            </div>
+            <button
+              onClick={handleSyncWhatsApp}
+              disabled={isSyncingWhatsApp}
+              title="Sincronizar conversas do WhatsApp (Z-API)"
+              className="p-2 bg-slate-50 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 border border-slate-200 rounded-lg transition-colors flex items-center justify-center shrink-0"
+            >
+              <RefreshCw className={`w-4 h-4 ${isSyncingWhatsApp ? 'animate-spin text-emerald-600' : ''}`} />
+            </button>
           </div>
 
           {/* Filter Pills */}
@@ -766,6 +835,18 @@ export const ChatDeskView: React.FC = () => {
 
                 {selectedConv.status !== 'CLOSED' && selectedConv.status !== 'WAITING' && (
                   <>
+                    <button
+                      onClick={() => {
+                        setSimMsgText('');
+                        setIsSimulateModalOpen(true);
+                      }}
+                      className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs"
+                      title="Simular mensagem recebida pelo WhatsApp do cliente"
+                    >
+                      <MessageSquarePlus className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="hidden md:inline">Simular Resposta</span>
+                    </button>
+
                     <button
                       onClick={handleOpenTransfer}
                       className="px-3.5 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-50 flex items-center gap-1.5 transition-colors shadow-xs"
@@ -1420,6 +1501,93 @@ export const ChatDeskView: React.FC = () => {
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                 <span>Salvar & Encerrar</span>
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: SIMULAR MENSAGEM DO CLIENTE (TESTE RÁPIDO DE INBOUND)             */}
+      {/* ========================================================================= */}
+      {isSimulateModalOpen && selectedConv && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-slate-100">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                  <MessageSquarePlus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-800">Simular Resposta do Cliente</h3>
+                  <p className="text-xs text-slate-500">
+                    Enviando como <strong>{selectedConv.customer?.name}</strong> ({selectedConv.customer?.phone})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsSimulateModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 font-bold p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                Escolha uma mensagem rápida de teste:
+              </label>
+              <div className="grid grid-cols-1 gap-2">
+                {[
+                  'Quero cotar um pacote para Porto de Galinhas para 2 pessoas em Outubro.',
+                  'Qual o valor aproximado para Cancún com hotel all-inclusive?',
+                  'Temos um grupo de 4 adultos para viajar no Réveillon com orçamento de R$ 15.000.',
+                  'Gostei da proposta, como faço para fechar e assinar o contrato?',
+                ].map((preset, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => handleSimulateCustomerMessage(preset)}
+                    disabled={isSimulating}
+                    className="text-left text-xs p-2.5 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/50 text-slate-700 transition-all cursor-pointer font-medium"
+                  >
+                    💬 "{preset}"
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-slate-700">
+                Ou digite uma mensagem personalizada:
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={simMsgText}
+                  onChange={(e) => setSimMsgText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSimulateCustomerMessage();
+                  }}
+                  placeholder="ex: Olá, tenho interesse em viajar no próximo mês..."
+                  className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleSimulateCustomerMessage()}
+                  disabled={!simMsgText.trim() || isSimulating}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{isSimulating ? 'Enviando...' : 'Enviar'}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-2 text-[11px] text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex items-start gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <span>
+                Essa simulação aciona o mesmo fluxo do webhook do WhatsApp oficial: roteamento inteligente, extração de parâmetros de viagem com IA e notificações em tempo real.
+              </span>
             </div>
           </div>
         </div>

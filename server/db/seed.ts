@@ -36,11 +36,7 @@ export async function seedDatabase(): Promise<void> {
       } catch {}
     }
 
-    // Clean all mock dummy conversations, messages, events, and mock customers
-    dbRun("DELETE FROM messages WHERE id LIKE 'msg_%' OR conversation_id LIKE 'cnv_%'");
-    dbRun("DELETE FROM conversation_events WHERE conversation_id LIKE 'cnv_%'");
-    dbRun("DELETE FROM conversations WHERE id LIKE 'cnv_%'");
-    dbRun("DELETE FROM customers WHERE id LIKE 'cst_%'");
+    // Seed users if not exist
     const defaultPw = await bcrypt.hash('viagens123', 10);
     const anaExists = dbGet('SELECT id FROM users WHERE id = ? OR email = ?', ['usr_anapaula', 'consultor4@realizzetravel.com.br']);
     if (!anaExists) {

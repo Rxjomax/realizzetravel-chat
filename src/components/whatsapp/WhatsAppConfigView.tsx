@@ -242,6 +242,23 @@ export const WhatsAppConfigView: React.FC = () => {
     setTimeout(() => setCopiedField(null), 2500);
   };
 
+  const [isSyncingZapi, setIsSyncingZapi] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+
+  const handleSyncZapi = async () => {
+    try {
+      setIsSyncingZapi(true);
+      setSyncStatus(null);
+      const res = await api.syncZapiChats();
+      setSyncStatus(res.message || 'Conversas sincronizadas com sucesso!');
+      setTimeout(() => setSyncStatus(null), 6000);
+    } catch (err: any) {
+      setSyncStatus(`Aviso: ${err.message || 'Não foi possível sincronizar no momento.'}`);
+    } finally {
+      setIsSyncingZapi(false);
+    }
+  };
+
   const handleSimulateIncoming = async (presetContent?: string) => {
     try {
       setIsSimulating(true);
@@ -576,7 +593,18 @@ export const WhatsAppConfigView: React.FC = () => {
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSyncZapi}
+                  disabled={isSyncingZapi}
+                  className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5"
+                  title="Puxa e sincroniza as últimas conversas ativas do WhatsApp no Z-API"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingZapi ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingZapi ? 'Sincronizando...' : 'Sincronizar Conversas'}</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={handleGenerateQr}
@@ -584,10 +612,17 @@ export const WhatsAppConfigView: React.FC = () => {
                   className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isGeneratingQr ? 'animate-spin' : ''}`} />
-                  <span>Verificar Status / QR Code</span>
+                  <span>Verificar Status</span>
                 </button>
               </div>
             </div>
+
+            {syncStatus && (
+              <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs text-indigo-800 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0" />
+                <span>{syncStatus}</span>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <div>

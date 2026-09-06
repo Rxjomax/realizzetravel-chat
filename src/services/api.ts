@@ -517,6 +517,42 @@ class ApiService {
     return { message: newMsg };
   }
 
+  public async simulateInboundMessage(params: {
+    conversationId?: string;
+    phone?: string;
+    name?: string;
+    content: string;
+    messageType?: string;
+  }): Promise<{ success: boolean; result?: any }> {
+    try {
+      return await this.request<{ success: boolean; result?: any }>('/conversations/simulate-inbound', {
+        method: 'POST',
+        body: JSON.stringify(params),
+      });
+    } catch (err: any) {
+      console.warn('Simulate inbound message fallback:', err);
+      // Local fallback
+      if (params.conversationId) {
+        const localMsg: Message = {
+          id: `sim_local_${Date.now()}`,
+          organization_id: 'org_realizzetravel',
+          conversation_id: params.conversationId,
+          sender_type: 'CUSTOMER',
+          sender_id: 'customer_sim',
+          message_type: (params.messageType as any) || 'text',
+          content: params.content,
+          status: 'delivered',
+          created_at: new Date().toISOString(),
+        };
+        if (!this.localMessages[params.conversationId]) {
+          this.localMessages[params.conversationId] = [];
+        }
+        this.localMessages[params.conversationId].push(localMsg);
+      }
+      return { success: true };
+    }
+  }
+
   public async transferConversation(
     conversationId: string,
     targetUserId: string,
@@ -929,6 +965,12 @@ class ApiService {
     return await this.request('/settings/whatsapp/simulate-incoming', {
       method: 'POST',
       body: JSON.stringify(params),
+    });
+  }
+
+  public async syncZapiChats(): Promise<{ success: boolean; message: string; count: number }> {
+    return await this.request('/settings/whatsapp/sync-zapi', {
+      method: 'POST',
     });
   }
 

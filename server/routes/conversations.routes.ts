@@ -583,6 +583,50 @@ conversationsRouter.post('/:id/messages', authenticateToken, (req: Authenticated
   }
 });
 
+// POST /api/conversations/simulate-inbound - Simulate an incoming WhatsApp customer message (works in dev sandbox and tests)
+conversationsRouter.post('/simulate-inbound', authenticateToken, (req: AuthenticatedRequest, res: Response): void => {
+  try {
+    const orgId = req.user!.organization_id;
+    const { phone, name, content, messageType, conversationId } = req.body;
+
+    let targetPhone = phone;
+    let targetName = name;
+
+    if (conversationId) {
+      const conv = dbGet<any>(
+        `SELECT c.*, cust.phone as customer_phone, cust.name as customer_name 
+         FROM conversations c 
+         JOIN customers cust ON c.customer_id = cust.id 
+         WHERE c.id = ? AND c.organization_id = ?`,
+        [conversationId, orgId]
+      );
+      if (conv) {
+        targetPhone = targetPhone || conv.customer_phone;
+        targetName = targetName || conv.customer_name;
+      }
+    }
+
+    if (!targetPhone) {
+      targetPhone = '+558185057129';
+      targetName = targetName || 'Matheus Primo';
+    }
+
+    const result = WhatsAppService.processInboundMessage({
+      organizationId: orgId,
+      phone: targetPhone,
+      name: targetName || 'Cliente WhatsApp',
+      content: content || 'Olá! Gostaria de consultar pacotes de viagens.',
+      messageType: messageType || 'text',
+      whatsappMessageId: `sim_${Date.now()}`,
+    });
+
+    res.json({ success: true, result });
+  } catch (error: any) {
+    console.error('Error simulating inbound message:', error);
+    res.status(500).json({ error: error.message || 'Erro ao simular mensagem recebida' });
+  }
+});
+
 // POST /api/conversations/:id/transfer - Transfer conversation to another attendant
 conversationsRouter.post('/:id/transfer', authenticateToken, (req: AuthenticatedRequest, res: Response): void => {
   try {

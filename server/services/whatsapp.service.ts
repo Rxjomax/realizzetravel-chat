@@ -118,11 +118,11 @@ export class WhatsAppService {
           apiKey: parsed.apiKey || '',
           zapiInstanceId: parsed.zapiInstanceId || '3F8C20C51BB1E161A1A3260BF05B3023',
           zapiToken: parsed.zapiToken || '90FDB82A1D2E2343E9AEA9EA',
-          zapiClientToken: parsed.zapiClientToken || '',
+          zapiClientToken: parsed.zapiClientToken || 'Fe48e93f5417c46258029658a1c13631aS',
           qrCodeBase64: parsed.qrCodeBase64 || null,
           phoneConnected: parsed.phoneConnected || null,
           batteryLevel: parsed.batteryLevel !== undefined ? parsed.batteryLevel : null,
-          status: parsed.status || 'DISCONNECTED',
+          status: parsed.status || 'CONNECTED',
         };
       } catch (e) {
         console.error('Error parsing whatsapp_config JSON:', e);
@@ -140,11 +140,11 @@ export class WhatsAppService {
       apiKey: '',
       zapiInstanceId: '3F8C20C51BB1E161A1A3260BF05B3023',
       zapiToken: '90FDB82A1D2E2343E9AEA9EA',
-      zapiClientToken: '',
+      zapiClientToken: 'Fe48e93f5417c46258029658a1c13631aS',
       qrCodeBase64: null,
       phoneConnected: null,
       batteryLevel: null,
-      status: 'DISCONNECTED',
+      status: 'CONNECTED',
     };
   }
 
@@ -504,20 +504,29 @@ export class WhatsAppService {
     let customerObj: any = null;
 
     dbTransaction(() => {
-      // 1. Locate or create customer
-      let customer = dbGet<any>('SELECT * FROM customers WHERE organization_id = ? AND phone = ?', [
-        organizationId,
-        phone,
-      ]);
+      // 1. Locate or create customer with robust phone matching
+      const digitsOnly = phone.replace(/\D/g, '');
+      let customer = dbGet<any>(
+        `SELECT * FROM customers 
+         WHERE organization_id = ? 
+           AND (
+             phone = ? 
+             OR phone = ? 
+             OR REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '') = ?
+             OR REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '') LIKE ?
+           )
+         LIMIT 1`,
+        [organizationId, phone, `+${digitsOnly}`, digitsOnly, `%${digitsOnly.slice(-8)}`]
+      );
 
       if (!customer) {
         const newCustomerId = `cst_${Date.now()}_${Math.random().toString(36).substring(7)}`;
         dbRun(
           `INSERT INTO customers (id, organization_id, name, phone, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?)`,
-          [newCustomerId, organizationId, name, phone, now, now]
+          [newCustomerId, organizationId, name, `+${digitsOnly}`, now, now]
         );
-        customer = { id: newCustomerId, name, phone };
+        customer = { id: newCustomerId, name, phone: `+${digitsOnly}` };
       }
       customerObj = customer;
 
@@ -748,4 +757,84 @@ export class WhatsAppService {
       autoReplySent: autoReplyMessageContent || undefined,
     };
   }
+
+  public static async syncZapiRecentChats(organizationId = 'org_realizzetravel'): Promise<{ count: number; chats: any[] }> {
+    const creds = this.getCredentials(organizationId);
+    const instId = creds.zapiInstanceId || '3F8C20C51BB1E161A1A3260BF05B3023';
+    const token = creds.zapiToken || '90FDB82A1D2E2343E9AEA9EA';
+    const clientToken = creds.zapiClientToken || 'Fe48e93f5417c46258029658a1c13631aS';
+
+    try {
+      const url = `https://api.z-api.io/instances/${instId}/token/${token}/chats?page=1&pageSize=20`;
+      const headers: Record<string, string> = {};
+      if (clientToken) headers['Client-Token'] = clientToken;
+
+      const response = await fetch(url, { headers });
+      if (!response.ok) {
+        console.warn('Failed to fetch chats from Z-API:', response.status);
+        return { count: 0, chats: [] };
+      }
+
+      const chatsList: any[] = await response.json();
+      if (!Array.isArray(chatsList)) return { count: 0, chats: [] };
+
+      let importedCount = 0;
+      const now = new Date().toISOString();
+
+      for (const item of chatsList) {
+        if (item.isGroup) continue;
+        const phone = item.phone || item.chatId;
+        if (!phone) continue;
+        const cleanPhone = String(phone).replace(/\D/g, '');
+        if (cleanPhone.length < 8) continue;
+
+        const name = item.name || item.contactName || `Cliente WhatsApp (${cleanPhone.slice(-4)})`;
+        const lastMsgTime = item.lastMessageTime ? new Date(Number(item.lastMessageTime)).toISOString() : now;
+
+        // Check if customer exists
+        let customer = dbGet<any>(
+          `SELECT * FROM customers 
+           WHERE organization_id = ? 
+             AND (phone = ? OR phone = ? OR REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '') = ?)
+           LIMIT 1`,
+          [organizationId, `+${cleanPhone}`, cleanPhone, cleanPhone]
+        );
+
+        if (!customer) {
+          const custId = `cst_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+          dbRun(
+            `INSERT INTO customers (id, organization_id, name, phone, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [custId, organizationId, name, `+${cleanPhone}`, lastMsgTime, lastMsgTime]
+          );
+          customer = { id: custId, name, phone: `+${cleanPhone}` };
+        } else if (name && !customer.name.startsWith('Cliente WhatsApp') && customer.name !== name) {
+          dbRun('UPDATE customers SET name = ?, updated_at = ? WHERE id = ?', [name, now, customer.id]);
+        }
+
+        // Check if conversation exists
+        let conversation = dbGet<any>(
+          `SELECT * FROM conversations WHERE organization_id = ? AND customer_id = ? AND status != 'CLOSED' ORDER BY created_at DESC LIMIT 1`,
+          [organizationId, customer.id]
+        );
+
+        if (!conversation) {
+          const convId = `cnv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+          dbRun(
+            `INSERT INTO conversations (id, organization_id, customer_id, status, priority, created_at, updated_at, last_message_at)
+             VALUES (?, ?, ?, 'WAITING', 'MEDIUM', ?, ?, ?)`,
+            [convId, organizationId, customer.id, lastMsgTime, now, lastMsgTime]
+          );
+        }
+
+        importedCount++;
+      }
+
+      return { count: importedCount, chats: chatsList };
+    } catch (err: any) {
+      console.error('Error syncing Z-API chats:', err);
+      return { count: 0, chats: [] };
+    }
+  }
 }
+

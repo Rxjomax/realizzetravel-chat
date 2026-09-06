@@ -8,6 +8,9 @@ import { customersRouter } from './routes/customers.routes';
 import { webhookRouter } from './routes/webhook.routes';
 import { settingsRouter } from './routes/settings.routes';
 
+import { WhatsAppService } from './services/whatsapp.service';
+import { WebhookRelayService } from './services/webhook-relay.service';
+
 let dbInitialized = false;
 let initPromise: Promise<void> | null = null;
 
@@ -18,6 +21,14 @@ export async function ensureDbReady(): Promise<void> {
       await getDatabase();
       await seedDatabase();
       dbInitialized = true;
+      // Auto-sync active WhatsApp chats from Z-API into desk
+      WhatsAppService.syncZapiRecentChats('org_realizzetravel').catch((e) => {
+        console.warn('Auto Z-API sync error on startup:', e.message);
+      });
+      // Start real-time live WhatsApp inbound relay tunnel
+      WebhookRelayService.start().catch((e) => {
+        console.warn('Webhook Relay startup error:', e.message);
+      });
     })();
   }
   return initPromise;
