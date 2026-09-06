@@ -253,7 +253,16 @@ export const ChatDeskView: React.FC = () => {
       setMessages([]);
     });
 
+    // Guaranteed polling interval for instant message reception
+    const intervalTimer = setInterval(() => {
+      fetchConversations();
+      if (selectedConvId) {
+        fetchConversationDetails(selectedConvId);
+      }
+    }, 3000);
+
     return () => {
+      clearInterval(intervalTimer);
       unbindCreated();
       unbindAssigned();
       unbindNewMsg();

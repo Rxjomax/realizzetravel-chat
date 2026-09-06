@@ -1,12 +1,27 @@
 import { Router, Request, Response } from 'express';
 import { WhatsAppService } from '../services/whatsapp.service';
-import { dbGet, dbRun } from '../db/database';
-import { authenticateToken, requireRole, AuthenticatedRequest } from '../auth/middleware';
 
 export const webhookRouter = Router();
 
-// GET /webhooks/whatsapp - Meta Webhook Verification
-webhookRouter.get(['/webhooks/whatsapp', '/api/webhooks/whatsapp'], (req: Request, res: Response): void => {
+const WEBHOOK_PATHS = [
+  '/webhooks/whatsapp',
+  '/api/webhooks/whatsapp',
+  '/webhook/whatsapp',
+  '/api/webhook/whatsapp',
+  '/webhooks/zapi',
+  '/api/webhooks/zapi',
+  '/webhook/zapi',
+  '/api/webhook/zapi',
+  '/webhooks/evolution',
+  '/api/webhooks/evolution',
+  '/webhook/evolution',
+  '/api/webhook/evolution',
+  '/zapi',
+  '/api/zapi',
+];
+
+// GET - Meta Webhook Verification
+webhookRouter.get(WEBHOOK_PATHS, (req: Request, res: Response): void => {
   const mode = req.query['hub.mode'] as string;
   const token = req.query['hub.verify_token'] as string;
   const challenge = req.query['hub.challenge'] as string;
@@ -20,13 +35,15 @@ webhookRouter.get(['/webhooks/whatsapp', '/api/webhooks/whatsapp'], (req: Reques
     }
   }
 
-  res.status(403).send('Forbidden');
+  res.status(200).json({ status: 'OK', message: 'Webhook endpoint active' });
 });
 
-// POST /webhooks/whatsapp - Meta Inbound & QR Code Gateway Webhook
-webhookRouter.post(['/webhooks/whatsapp', '/api/webhooks/whatsapp', '/api/webhooks/evolution', '/api/webhooks/zapi'], (req: Request, res: Response): void => {
+// POST - Meta, Z-API & Evolution Inbound Webhook
+webhookRouter.post(WEBHOOK_PATHS, (req: Request, res: Response): void => {
   try {
-    WhatsAppService.handleInboundWebhook(req.body);
+    const body = req.body;
+    console.log('📥 INCOMING WEBHOOK RECEIVED on path:', req.originalUrl || req.url);
+    WhatsAppService.handleInboundWebhook(body);
     res.status(200).json({ status: 'SUCCESS', message: 'EVENT_RECEIVED' });
   } catch (error) {
     console.error('Error handling WhatsApp webhook:', error);

@@ -343,25 +343,70 @@ export class WhatsAppService {
       return;
     }
 
-    // Z-API specific on-message payload
-    if (body.phone && !body.isGroup && (body.text || body.image || body.document || body.audio || body.zaapId)) {
-      if (body.fromMe === true) return; // Skip attendant's own sent message
-      const cleanPhone = String(body.phone).replace(/\D/g, '');
-      if (!cleanPhone) return;
+    // Z-API specific on-message payload & general webhook message payloads
+    const rawPhone = body.phone || body.senderPhone || body.from || body.chatId || data?.phone || data?.from || data?.remoteJid;
+    const isFromMe = body.fromMe === true || body.isMyMessage === true || data?.key?.fromMe === true;
+    const isGroupMsg = body.isGroup === true || String(rawPhone || '').includes('-') || String(rawPhone || '').endsWith('@g.us');
 
-      const senderName = body.senderName || body.pushName || body.chatName || `Cliente WhatsApp (${cleanPhone.slice(-4)})`;
-      const msgText = body.text?.message || body.message || body.caption || (body.image ? '[Foto]' : body.document ? '[Documento]' : body.audio ? '[Áudio]' : 'Mensagem recebida');
+    if (rawPhone && !isGroupMsg && !isFromMe) {
+      const cleanPhone = String(rawPhone).replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
+      if (cleanPhone && cleanPhone.length >= 8) {
+        const senderName =
+          body.senderName ||
+          body.pushName ||
+          body.chatName ||
+          data?.pushName ||
+          `Cliente WhatsApp (${cleanPhone.slice(-4)})`;
 
-      this.processInboundMessage({
-        organizationId: targetOrg,
-        phone: `+${cleanPhone}`,
-        name: senderName,
-        content: String(msgText),
-        messageType: body.image ? 'image' : body.document ? 'document' : body.audio ? 'audio' : 'text',
-        mediaUrl: body.image?.imageUrl || body.document?.documentUrl || body.audio?.audioUrl || null,
-        whatsappMessageId: body.messageId || body.zaapId || `zapi_in_${Date.now()}`,
-      });
-      return;
+        // Extract message text / content
+        let msgText = '';
+        if (typeof body.text === 'string' && body.text.trim()) {
+          msgText = body.text.trim();
+        } else if (body.text?.message) {
+          msgText = body.text.message;
+        } else if (typeof body.message === 'string' && body.message.trim()) {
+          msgText = body.message.trim();
+        } else if (body.message?.conversation) {
+          msgText = body.message.conversation;
+        } else if (body.message?.extendedTextMessage?.text) {
+          msgText = body.message.extendedTextMessage.text;
+        } else if (body.body) {
+          msgText = String(body.body);
+        } else if (body.caption) {
+          msgText = String(body.caption);
+        } else if (body.image) {
+          msgText = body.image.caption || '[Foto]';
+        } else if (body.document) {
+          msgText = body.document.fileName ? `[Documento: ${body.document.fileName}]` : '[Documento]';
+        } else if (body.audio) {
+          msgText = '[Áudio]';
+        } else if (body.video) {
+          msgText = '[Vídeo]';
+        } else if (body.location) {
+          msgText = '[Localização]';
+        } else if (body.contact || body.contacts) {
+          msgText = '[Contato compartilhado]';
+        } else {
+          msgText = 'Mensagem recebida';
+        }
+
+        const msgType = body.image ? 'image' : body.document ? 'document' : body.audio ? 'audio' : 'text';
+        const mediaUrl = body.image?.imageUrl || body.document?.documentUrl || body.audio?.audioUrl || null;
+        const msgId = body.messageId || body.zaapId || body.id || `zapi_in_${Date.now()}`;
+
+        console.log(`💬 Processando mensagem recebida de +${cleanPhone}: "${msgText}"`);
+
+        this.processInboundMessage({
+          organizationId: targetOrg,
+          phone: `+${cleanPhone}`,
+          name: senderName,
+          content: String(msgText),
+          messageType: msgType,
+          mediaUrl,
+          whatsappMessageId: msgId,
+        });
+        return;
+      }
     }
 
     // Generic QR Code / Evolution API Inbound Message
