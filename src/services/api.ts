@@ -81,6 +81,7 @@ class ApiService {
         throw new Error(errorMessage);
       }
 
+      this.isFallbackMode = false;
       return await res.json();
     } catch (err: any) {
       // If error is related to Vercel Lambda / invocation failed, activate transparent client resilience
@@ -374,39 +375,26 @@ class ApiService {
 
   // Conversations Endpoints
   public async getConversations(filter?: string, search?: string): Promise<{ conversations: Conversation[] }> {
-    this.loadLocalStorageState();
-    // Regra de Negócio: Se o atendente não interagir no chat em 1 dia (24h), o cliente volta para aguardando
-    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-    this.localConversations.forEach(c => {
-      if ((c.status === 'OPEN' || c.status === 'ASSIGNED') && c.assigned_user_id) {
-        const updatedTime = c.updated_at ? new Date(c.updated_at).getTime() : 0;
-        const msgTime = c.last_message_at ? new Date(c.last_message_at).getTime() : 0;
-        const lastActivity = Math.max(updatedTime, msgTime);
-        if (lastActivity > 0 && lastActivity < oneDayAgo) {
-          c.status = 'WAITING';
-          c.assigned_user_id = null;
-          c.assigned_user = null;
-          c.auto_requeued_inactivity = true;
-          c.updated_at = new Date().toISOString();
-        }
+    try {
+      const params = new URLSearchParams();
+      if (filter) params.append('filter', filter);
+      if (search) params.append('search', search);
+      const data = await this.request<{ conversations: Conversation[] }>(`/conversations?${params.toString()}`);
+      if (data && Array.isArray(data.conversations)) {
+        this.isFallbackMode = false;
+        // Clean out stale mock local storage if real API is connected
+        try {
+          localStorage.removeItem('realizze_local_convs');
+          localStorage.removeItem('realizze_local_msgs');
+        } catch {}
+        return data;
       }
-    });
-
-    if (!this.isFallbackMode) {
-      try {
-        const params = new URLSearchParams();
-        if (filter) params.append('filter', filter);
-        if (search) params.append('search', search);
-        const data = await this.request<{ conversations: Conversation[] }>(`/conversations?${params.toString()}`);
-        if (data && Array.isArray(data.conversations)) {
-          return data;
-        }
-      } catch (err) {
-        console.warn('Backend conversations unavailable, switching to local state mode:', err);
-        this.isFallbackMode = true;
-      }
+    } catch (err) {
+      console.warn('Backend conversations error, falling back to local storage:', err);
+      this.isFallbackMode = true;
     }
 
+    this.loadLocalStorageState();
     let list = [...this.localConversations];
     const normFilter = (filter || '').toLowerCase();
 
@@ -419,7 +407,6 @@ class ApiService {
     } else if (normFilter === 'closed' || normFilter === 'encerradas' || normFilter === 'finalizadas') {
       list = list.filter(c => c.status === 'CLOSED');
     }
-    // 'all' or 'total' returns all list
 
     if (search) {
       const q = search.toLowerCase();
@@ -439,28 +426,6 @@ class ApiService {
     events: any[];
     notes: any[];
   }> {
-    this.loadLocalStorageState();
-
-    if (this.isFallbackMode) {
-      const conv = this.localConversations.find(c => c.id === id) || this.localConversations[0];
-      const msgs = this.localMessages[id] || [];
-      return {
-        conversation: conv,
-        messages: msgs,
-        events: [
-          {
-            id: 'ev_1',
-            event_type: 'CREATED',
-            user_id: null,
-            user_name: undefined,
-            created_at: conv.created_at,
-            metadata: null,
-          }
-        ],
-        notes: [],
-      };
-    }
-
     try {
       const data = await this.request<{
         conversation: Conversation;
@@ -468,32 +433,24 @@ class ApiService {
         events: any[];
         notes: any[];
       }>(`/conversations/${id}`);
-      if (data && Array.isArray(data.messages)) {
-        const localMsgs = this.localMessages[id] || [];
-        // Combine without duplicates
-        const combined = [...data.messages];
-        for (const lm of localMsgs) {
-          if (!combined.some(m => m.id === lm.id || (m.content === lm.content && Math.abs(new Date(m.created_at).getTime() - new Date(lm.created_at).getTime()) < 3000))) {
-            combined.push(lm);
-          }
-        }
-        combined.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-        return {
-          ...data,
-          messages: combined,
-        };
+      if (data && data.conversation && Array.isArray(data.messages)) {
+        this.isFallbackMode = false;
+        return data;
       }
-      return data;
-    } catch {
-      const conv = this.localConversations.find(c => c.id === id) || this.localConversations[0];
-      const msgs = this.localMessages[id] || [];
-      return {
-        conversation: conv,
-        messages: msgs,
-        events: [],
-        notes: [],
-      };
+    } catch (err) {
+      console.warn('Backend details error, falling back to local storage:', err);
+      this.isFallbackMode = true;
     }
+
+    this.loadLocalStorageState();
+    const conv = this.localConversations.find(c => c.id === id) || this.localConversations[0];
+    const msgs = this.localMessages[id] || [];
+    return {
+      conversation: conv,
+      messages: msgs,
+      events: [],
+      notes: [],
+    };
   }
 
   public async assignConversation(id: string): Promise<{ success: boolean; message: string }> {
@@ -792,94 +749,17 @@ class ApiService {
   }
 
   public async syncWhatsAppChats(): Promise<{ success: boolean; count: number; message?: string }> {
-    this.loadLocalStorageState();
-
     try {
       const res = await this.request<{ success: boolean; count: number }>('/conversations/sync-whatsapp', {
         method: 'POST',
       });
-      if (res && typeof res.count === 'number' && res.count > 0) {
+      if (res && typeof res.count === 'number') {
         return res;
       }
-    } catch {
-      // Proceed to client direct sync fallback
+    } catch (err: any) {
+      console.warn('Backend WhatsApp sync error:', err);
     }
-
-    try {
-      const instId = '3F8C20C51BB1E161A1A3260BF05B3023';
-      const token = '90FDB82A1D2E2343E9AEA9EA';
-      const clientToken = 'Fe48e93f5417c46258029658a1c13631aS';
-
-      const resp = await fetch(`https://api.z-api.io/instances/${instId}/token/${token}/chats?page=1&pageSize=30`, {
-        headers: { 'Client-Token': clientToken }
-      });
-      if (resp.ok) {
-        const chatsList = await resp.json();
-        let imported = 0;
-        if (Array.isArray(chatsList)) {
-          chatsList.forEach((chat: any, idx: number) => {
-            const rawPhone = String(chat.phone || '').replace(/\D/g, '');
-            if (!rawPhone) return;
-            const contactName = chat.name || chat.contactName || chat.shortName || `Cliente WhatsApp (${rawPhone.slice(-4)})`;
-            const msgDate = chat.lastMessageTime ? new Date(Number(chat.lastMessageTime)).toISOString() : new Date().toISOString();
-            
-            let existing = this.localConversations.find(c => c.customer?.phone?.replace(/\D/g, '') === rawPhone);
-            const convId = existing ? existing.id : `conv_zapi_${rawPhone}_${idx}`;
-
-            const initialMsg: Message = {
-              id: `msg_zapi_${rawPhone}`,
-              organization_id: 'org_realizzetravel',
-              conversation_id: convId,
-              sender_type: 'CUSTOMER',
-              sender_id: `cust_zapi_${rawPhone}`,
-              sender_name: contactName,
-              message_type: 'text',
-              content: chat.lastMessage || 'Olá! Gostaria de atendimento com a Realizze Travel para minha viagem.',
-              status: 'delivered',
-              created_at: msgDate,
-            };
-
-            if (!this.localMessages[convId] || this.localMessages[convId].length === 0) {
-              this.localMessages[convId] = [initialMsg];
-            }
-
-            if (!existing) {
-              const newConv: Conversation = {
-                id: convId,
-                organization_id: 'org_realizzetravel',
-                customer_id: `cust_zapi_${rawPhone}`,
-                status: 'WAITING',
-                assigned_user_id: null,
-                priority: 'MEDIUM',
-                created_at: msgDate,
-                updated_at: msgDate,
-                last_message_at: msgDate,
-                auto_requeued_inactivity: false,
-                customer: {
-                  id: `cust_zapi_${rawPhone}`,
-                  organization_id: 'org_realizzetravel',
-                  name: contactName,
-                  phone: rawPhone,
-                  email: '',
-                  created_at: msgDate,
-                  updated_at: msgDate,
-                  destination_interest: 'Pacote de Viagem',
-                },
-                last_message: initialMsg
-              };
-              this.localConversations.unshift(newConv);
-              imported++;
-            }
-          });
-          this.saveLocalStorageState();
-        }
-        return { success: true, count: imported || chatsList.length };
-      }
-    } catch (err) {
-      console.warn('Client direct Z-API fetch notice:', err);
-    }
-
-    return { success: true, count: 0 };
+    return { success: false, count: 0, message: 'Falha ao sincronizar com o WhatsApp.' };
   }
 
   public async syncZapiChats(): Promise<{ success: boolean; count: number; message?: string }> {

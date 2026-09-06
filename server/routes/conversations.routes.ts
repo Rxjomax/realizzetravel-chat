@@ -280,11 +280,10 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
       params.push(term, term, term);
     }
 
-    // Order: WAITING first with highest priority & oldest wait time, then latest message
+    // Order: Latest message/activity first
     sql += `
       ORDER BY
-        CASE WHEN c.status = 'WAITING' THEN 0 ELSE 1 END,
-        c.last_message_at DESC
+        COALESCE(c.last_message_at, c.updated_at, c.created_at) DESC
     `;
 
     const rows = dbQuery<any>(sql, params);

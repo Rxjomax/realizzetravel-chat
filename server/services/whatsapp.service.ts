@@ -818,6 +818,11 @@ export class WhatsAppService {
              VALUES (?, ?, ?, 'WAITING', 'MEDIUM', ?, ?, ?)`,
             [convId, organizationId, customer.id, lastMsgTime, now, lastMsgTime]
           );
+        } else {
+          dbRun(
+            `UPDATE conversations SET last_message_at = ?, updated_at = ? WHERE id = ?`,
+            [lastMsgTime, now, conversation.id]
+          );
         }
 
         // Also ensure the last message from Z-API chat item is in messages table
