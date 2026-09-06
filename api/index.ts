@@ -1,5 +1,20 @@
-import { createExpressApp } from '../server/app';
+import { createExpressApp, ensureDbReady } from '../server/app';
 
-const app = createExpressApp();
+let appInstance: any = null;
 
-export default app;
+function getApp() {
+  if (!appInstance) {
+    appInstance = createExpressApp();
+  }
+  return appInstance;
+}
+
+export default async function handler(req: any, res: any) {
+  try {
+    await ensureDbReady();
+  } catch (err: any) {
+    console.error('ensureDbReady handler error:', err);
+  }
+  const app = getApp();
+  return app(req, res);
+}

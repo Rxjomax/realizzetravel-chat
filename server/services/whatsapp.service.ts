@@ -867,6 +867,10 @@ export class WhatsAppService {
         importedCount++;
       }
 
+      if (importedCount > 0) {
+        broadcastEvent('poll:sync', { count: importedCount }, organizationId);
+      }
+
       return { count: importedCount, chats: chatsList };
     } catch (err: any) {
       console.error('Error syncing Z-API chats:', err);

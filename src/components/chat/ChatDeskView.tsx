@@ -100,10 +100,14 @@ export const ChatDeskView: React.FC = () => {
   const handleSyncWhatsApp = async () => {
     try {
       setIsSyncingWhatsApp(true);
-      await api.syncZapiChats();
+      const res = await api.syncZapiChats();
       await fetchConversations();
       if (selectedConvId) {
         await fetchConversationDetails(selectedConvId);
+      }
+      if (res && res.count > 0) {
+        setSuccessMessage(`${res.count} conversas sincronizadas com sucesso!`);
+        setTimeout(() => setSuccessMessage(null), 4000);
       }
     } catch (e) {
       console.error('Error syncing WhatsApp:', e);
@@ -707,16 +711,29 @@ export const ChatDeskView: React.FC = () => {
           {conversations.length === 0 ? (
             <div className="p-8 text-center text-slate-500 text-xs space-y-3">
               <Filter className="w-8 h-8 mx-auto text-slate-300" />
-              <p className="font-medium">Nenhuma conversa encontrada na aba "{activeFilter === 'WAITING' ? 'Aguardando' : activeFilter === 'OPEN' ? 'Em Atendimento' : activeFilter === 'MY' ? 'Minhas' : 'Filtro'}".</p>
-              {activeFilter !== 'ALL' && (
+              <p className="font-medium">
+                Nenhuma conversa encontrada na aba "{activeFilter === 'ALL' ? 'Todas' : activeFilter === 'WAITING' ? 'Aguardando' : activeFilter === 'OPEN' ? 'Em Atendimento' : activeFilter === 'MY' ? 'Minhas' : 'Encerradas'}".
+              </p>
+              <div className="flex flex-col gap-2 items-center pt-2">
                 <button
                   type="button"
-                  onClick={() => setActiveFilter('ALL')}
-                  className="px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                  onClick={handleSyncWhatsApp}
+                  disabled={isSyncingWhatsApp}
+                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg text-xs shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
-                  Ver Todas as Conversas
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingWhatsApp ? 'animate-spin' : ''}`} />
+                  {isSyncingWhatsApp ? 'Sincronizando...' : 'Puxar Conversas do WhatsApp'}
                 </button>
-              )}
+                {activeFilter !== 'ALL' && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveFilter('ALL')}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded-lg text-xs transition-colors cursor-pointer"
+                  >
+                    Ver Todas as Conversas
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
             conversations.map((c) => {
