@@ -20,20 +20,37 @@ import { User, Customer } from '../../types';
 
 export const ReportsView: React.FC = () => {
   const [timeRange, setTimeRange] = useState<'7d' | '30d' | 'month'>('30d');
-  const [users, setUsers] = useState<User[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [salesStats, setSalesStats] = useState({
+    totalClosed: 0,
+    wonCount: 0,
+    lostCount: 0,
+    conversionRate: 0,
+    totalSalesVolume: 0,
+    avgTicket: 0,
+    lostReasons: [] as { reason: string; count: number; percent: number }[],
+  });
+  const [destinationStats, setDestinationStats] = useState<{ name: string; count: number; category: string; percentage: number }[]>([]);
+  const [attendantsPerformance, setAttendantsPerformance] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     async function loadData() {
       try {
         setIsLoading(true);
-        const [usersRes, customersRes] = await Promise.all([
-          api.getUsers(),
-          api.getCustomers(),
-        ]);
-        setUsers(usersRes.users || []);
-        setCustomers(customersRes.customers || []);
+        const data = await api.getCommercialReports();
+        if (data) {
+          setSalesStats(data.salesStats || {
+            totalClosed: 0,
+            wonCount: 0,
+            lostCount: 0,
+            conversionRate: 0,
+            totalSalesVolume: 0,
+            avgTicket: 0,
+            lostReasons: [],
+          });
+          setDestinationStats(data.destinationStats || []);
+          setAttendantsPerformance(data.attendantsPerformance || []);
+        }
       } catch (err) {
         console.error('Error loading reports data:', err);
       } finally {
@@ -41,102 +58,7 @@ export const ReportsView: React.FC = () => {
       }
     }
     loadData();
-  }, []);
-
-  // Destination interest statistics calculation
-  const destinationStats = useMemo(() => {
-    const counts: Record<string, { count: number; name: string; category: string }> = {
-      'Porto Seguro / Arraial d\'Ajuda': { count: 38, name: 'Porto Seguro & Arraial, BA', category: 'Nordeste' },
-      'Maceió / Maragogi': { count: 29, name: 'Maceió & Maragogi, AL', category: 'Nordeste' },
-      'Natal / Pipa': { count: 24, name: 'Natal & Praia da Pipa, RN', category: 'Nordeste' },
-      'Gramado / Canela': { count: 19, name: 'Gramado & Serra Gaúcha, RS', category: 'Sul' },
-      'Cruzeiros MSC / Costa': { count: 16, name: 'Cruzeiros Marítimos Réveillon/Verão', category: 'Cruzeiros' },
-      'Orlando / Disney': { count: 12, name: 'Orlando & Parques Disney/Universal', category: 'Internacional' },
-      'Santiago / Chile': { count: 9, name: 'Santiago & Valle Nevado, Chile', category: 'Internacional' },
-      'Fernando de Noronha': { count: 7, name: 'Fernando de Noronha, PE', category: 'Ecoturismo' },
-    };
-
-    // Aggregate destinations from customers
-    customers.forEach((c) => {
-      if (c.destination_interest) {
-        const dest = c.destination_interest.trim();
-        const matchedKey = Object.keys(counts).find(k => k.toLowerCase().includes(dest.toLowerCase()) || dest.toLowerCase().includes(k.toLowerCase()));
-        if (matchedKey) {
-          counts[matchedKey].count += 1;
-        }
-      }
-    });
-
-    const list = Object.values(counts).sort((a, b) => b.count - a.count);
-    const totalCount = list.reduce((sum, item) => sum + item.count, 0);
-    return list.map(item => ({
-      ...item,
-      percentage: totalCount > 0 ? Math.round((item.count / totalCount) * 100) : 0,
-    }));
-  }, [customers]);
-
-  // Sales conversion stats
-  const salesStats = useMemo(() => {
-    const totalClosed = 164;
-    const wonCount = 48;
-    const lostCount = 116;
-    const conversionRate = Math.round((wonCount / totalClosed) * 1000) / 10;
-    const totalSalesVolume = 324600; // R$
-    const avgTicket = Math.round(totalSalesVolume / wonCount);
-
-    const lostReasons = [
-      { reason: 'Orçamento acima do esperado pelo cliente', count: 44, percent: 38 },
-      { reason: 'Datas incompatíveis / sem vagas em voos', count: 28, percent: 24 },
-      { reason: 'Cliente parou de responder no WhatsApp', count: 22, percent: 19 },
-      { reason: 'Comprou com outra agência / concorrente', count: 14, percent: 12 },
-      { reason: 'Apenas cotação prévia / adiou viagem', count: 8, percent: 7 },
-    ];
-
-    return {
-      totalClosed,
-      wonCount,
-      lostCount,
-      conversionRate,
-      totalSalesVolume,
-      avgTicket,
-      lostReasons,
-    };
-  }, []);
-
-  // Attendants performance (Admin, Supervisor e Consultores 1 a 6)
-  const attendantsPerformance = useMemo(() => {
-    const mockPerf = [
-      { name: 'Carlos Santos', role: 'ADMIN', totalChats: 54, won: 18, rate: '33.3%', revenue: 'R$ 112.400', avgTime: '2.8 min', score: '★ 4.9' },
-      { name: 'Renata Lima', role: 'SUPERVISOR', totalChats: 48, won: 15, rate: '31.2%', revenue: 'R$ 96.800', avgTime: '3.1 min', score: '★ 4.9' },
-      { name: 'Consultor 1 (João Silva)', role: 'ATTENDANT', totalChats: 36, won: 10, rate: '27.7%', revenue: 'R$ 64.200', avgTime: '3.9 min', score: '★ 4.8' },
-      { name: 'Consultor 2 (Maria Oliveira)', role: 'ATTENDANT', totalChats: 31, won: 8, rate: '25.8%', revenue: 'R$ 51.500', avgTime: '4.2 min', score: '★ 4.7' },
-      { name: 'Consultor 3 (Pedro Souza)', role: 'ATTENDANT', totalChats: 28, won: 7, rate: '25.0%', revenue: 'R$ 44.000', avgTime: '4.5 min', score: '★ 4.8' },
-      { name: 'Consultor 4 (Ana Paula)', role: 'ATTENDANT', totalChats: 24, won: 6, rate: '25.0%', revenue: 'R$ 38.200', avgTime: '4.8 min', score: '★ 4.7' },
-      { name: 'Consultor 5 (Lucas Ferreira)', role: 'ATTENDANT', totalChats: 22, won: 5, rate: '22.7%', revenue: 'R$ 31.900', avgTime: '5.0 min', score: '★ 4.6' },
-      { name: 'Consultor 6 (Beatriz Costa)', role: 'ATTENDANT', totalChats: 18, won: 4, rate: '22.2%', revenue: 'R$ 26.500', avgTime: '5.2 min', score: '★ 4.7' },
-    ];
-
-    // Merge with real users if loaded
-    if (users.length > 0) {
-      return users.map((u, idx) => {
-        const perf = mockPerf[idx] || mockPerf[0];
-        return {
-          id: u.id,
-          name: u.name,
-          role: u.role,
-          status: u.status,
-          totalChats: perf.totalChats,
-          won: perf.won,
-          rate: perf.rate,
-          revenue: perf.revenue,
-          avgTime: perf.avgTime,
-          score: perf.score,
-        };
-      });
-    }
-
-    return mockPerf.map((p, idx) => ({ id: `c-${idx}`, status: 'ONLINE', ...p }));
-  }, [users]);
+  }, [timeRange]);
 
   return (
     <div className="p-6 lg:p-8 space-y-8 max-w-7xl mx-auto w-full">
@@ -216,7 +138,7 @@ export const ReportsView: React.FC = () => {
             </div>
             <div className="text-2xl font-extrabold text-slate-900 mt-2">{salesStats.lostCount} cotações</div>
             <div className="text-xs text-rose-600 font-semibold mt-1">
-              {Math.round((salesStats.lostCount / salesStats.totalClosed) * 100)}% de perda registrada
+              {salesStats.totalClosed > 0 ? `${Math.round((salesStats.lostCount / salesStats.totalClosed) * 100)}% de perda registrada` : '0% de perda registrada'}
             </div>
           </div>
 
@@ -255,24 +177,30 @@ export const ReportsView: React.FC = () => {
             <PieChart className="w-4 h-4 text-rose-500" />
             Diagnóstico Comercial: Principais Motivos de Perda de Vendas
           </h4>
-          <div className="space-y-3">
-            {salesStats.lostReasons.map((item, idx) => (
-              <div key={idx} className="space-y-1 text-xs">
-                <div className="flex items-center justify-between text-slate-700 font-medium">
-                  <span>{item.reason}</span>
-                  <span className="font-bold text-slate-900">
-                    {item.count} casos ({item.percent}%)
-                  </span>
+          {salesStats.lostReasons.length === 0 ? (
+            <div className="py-6 text-center text-xs text-slate-400">
+              Nenhuma perda registrada até o momento. As métricas aparecerão automaticamente ao finalizar atendimentos.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {salesStats.lostReasons.map((item, idx) => (
+                <div key={idx} className="space-y-1 text-xs">
+                  <div className="flex items-center justify-between text-slate-700 font-medium">
+                    <span>{item.reason}</span>
+                    <span className="font-bold text-slate-900">
+                      {item.count} casos ({item.percent}%)
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-rose-500 h-2 rounded-full transition-all duration-500"
+                      style={{ width: `${item.percent}%` }}
+                    />
+                  </div>
                 </div>
-                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-rose-500 h-2 rounded-full transition-all duration-500"
-                    style={{ width: `${item.percent}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -293,50 +221,56 @@ export const ReportsView: React.FC = () => {
           </span>
         </div>
 
-        <div className="space-y-3.5">
-          {destinationStats.map((dest, idx) => {
-            const barColors = [
-              'bg-blue-600',
-              'bg-cyan-500',
-              'bg-teal-500',
-              'bg-emerald-500',
-              'bg-indigo-500',
-              'bg-violet-500',
-              'bg-amber-500',
-              'bg-rose-500',
-            ];
-            const colorClass = barColors[idx % barColors.length];
+        {destinationStats.length === 0 ? (
+          <div className="py-6 text-center text-xs text-slate-400">
+            Nenhum destino catalogado ainda. Conforme os clientes solicitarem cotações, os destinos em alta serão listados aqui.
+          </div>
+        ) : (
+          <div className="space-y-3.5">
+            {destinationStats.map((dest, idx) => {
+              const barColors = [
+                'bg-blue-600',
+                'bg-cyan-500',
+                'bg-teal-500',
+                'bg-emerald-500',
+                'bg-indigo-500',
+                'bg-violet-500',
+                'bg-amber-500',
+                'bg-rose-500',
+              ];
+              const colorClass = barColors[idx % barColors.length];
 
-            return (
-              <div key={idx} className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center font-bold text-[10px]">
-                      {idx + 1}
-                    </span>
-                    <span className="font-bold text-slate-800">{dest.name}</span>
-                    <span className="text-[10px] text-slate-400 bg-slate-50 border border-slate-200 px-1.5 py-0.2 rounded font-medium">
-                      {dest.category}
-                    </span>
+              return (
+                <div key={idx} className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center font-bold text-[10px]">
+                        {idx + 1}
+                      </span>
+                      <span className="font-bold text-slate-800">{dest.name}</span>
+                      <span className="text-[10px] text-slate-400 bg-slate-50 border border-slate-200 px-1.5 py-0.2 rounded font-medium">
+                        {dest.category}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-slate-500 text-[11px]">{dest.count} cotações</span>
+                      <span className="font-extrabold text-slate-900 text-xs w-10 text-right">
+                        {dest.percentage}%
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-slate-500 text-[11px]">{dest.count} cotações</span>
-                    <span className="font-extrabold text-slate-900 text-xs w-10 text-right">
-                      {dest.percentage}%
-                    </span>
+
+                  <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden p-0.5 flex">
+                    <div
+                      className={`${colorClass} h-2 rounded-full transition-all duration-700`}
+                      style={{ width: `${Math.min(dest.percentage * 3.5, 100)}%` }}
+                    />
                   </div>
                 </div>
-
-                <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden p-0.5 flex">
-                  <div
-                    className={`${colorClass} h-2 rounded-full transition-all duration-700`}
-                    style={{ width: `${dest.percentage * 3.5}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* SEÇÃO 3: DESEMPENHO DA EQUIPE (ADMIN, SUPERVISOR E CONSULTORES 1 A 6) */}

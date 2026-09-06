@@ -43,12 +43,156 @@ conversationsRouter.get('/metrics/summary', authenticateToken, (req: Authenticat
       myCount,
       closedTodayCount,
       totalCustomersCount,
-      avgResponseMinutes: 4.2, // calculated metric
-      avgHandleMinutes: 18.5,
+      avgResponseMinutes: 0,
+      avgHandleMinutes: 0,
     });
   } catch (error) {
     console.error('Error getting metrics:', error);
     res.status(500).json({ error: 'Erro ao calcular métricas de atendimento.' });
+  }
+});
+
+// GET /api/conversations/reports/commercial - Dynamic Real Reports and Commercial Analytics
+conversationsRouter.get('/reports/commercial', authenticateToken, (req: AuthenticatedRequest, res: Response): void => {
+  try {
+    const orgId = req.user!.organization_id;
+
+    // 1. Get closed conversation events to accurately extract WON, LOST, saleValue, lostReason
+    const closedEvents = dbQuery<{
+      user_id: string;
+      metadata: string;
+      created_at: string;
+    }>(
+      `SELECT e.user_id, e.metadata, e.created_at
+       FROM conversation_events e
+       JOIN conversations c ON c.id = e.conversation_id
+       WHERE c.organization_id = ? AND e.event_type = 'CLOSED'
+       ORDER BY e.created_at DESC`,
+      [orgId]
+    );
+
+    let wonCount = 0;
+    let lostCount = 0;
+    let totalSalesVolume = 0;
+    const lostReasonsMap: Record<string, number> = {};
+
+    // User metrics map
+    const userStatsMap: Record<string, { totalChats: number; won: number; revenue: number }> = {};
+
+    closedEvents.forEach((evt) => {
+      let meta: any = {};
+      try {
+        if (evt.metadata) meta = JSON.parse(evt.metadata);
+      } catch {}
+
+      const outcome = meta.outcome || 'WON';
+      const saleValue = Number(meta.saleValue) || 0;
+      const lostReason = meta.lostReason || 'Outros motivos';
+
+      if (evt.user_id) {
+        if (!userStatsMap[evt.user_id]) {
+          userStatsMap[evt.user_id] = { totalChats: 0, won: 0, revenue: 0 };
+        }
+        userStatsMap[evt.user_id].totalChats += 1;
+      }
+
+      if (outcome === 'WON') {
+        wonCount += 1;
+        totalSalesVolume += saleValue;
+        if (evt.user_id && userStatsMap[evt.user_id]) {
+          userStatsMap[evt.user_id].won += 1;
+          userStatsMap[evt.user_id].revenue += saleValue;
+        }
+      } else {
+        lostCount += 1;
+        lostReasonsMap[lostReason] = (lostReasonsMap[lostReason] || 0) + 1;
+      }
+    });
+
+    const totalClosed = wonCount + lostCount;
+    const conversionRate = totalClosed > 0 ? Math.round((wonCount / totalClosed) * 1000) / 10 : 0;
+    const avgTicket = wonCount > 0 ? Math.round(totalSalesVolume / wonCount) : 0;
+
+    const lostReasons = Object.entries(lostReasonsMap)
+      .map(([reason, count]) => ({
+        reason,
+        count,
+        percent: lostCount > 0 ? Math.round((count / lostCount) * 100) : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    // 2. Aggregate destination interest from customers
+    const destRows = dbQuery<{ destination_interest: string; count: number }>(
+      `SELECT destination_interest, COUNT(*) as count
+       FROM customers
+       WHERE organization_id = ? AND destination_interest IS NOT NULL AND TRIM(destination_interest) != ''
+       GROUP BY destination_interest
+       ORDER BY count DESC`,
+      [orgId]
+    );
+
+    const totalDestCount = destRows.reduce((sum, r) => sum + r.count, 0);
+    const destinationStats = destRows.map((r) => ({
+      name: r.destination_interest,
+      count: r.count,
+      category: 'Destino',
+      percentage: totalDestCount > 0 ? Math.round((r.count / totalDestCount) * 100) : 0,
+    }));
+
+    // 3. User performance table
+    const users = dbQuery<{ id: string; name: string; email: string; role: string; status: string; avatar: string }>(
+      `SELECT id, name, email, role, status, avatar FROM users WHERE organization_id = ? ORDER BY name ASC`,
+      [orgId]
+    );
+
+    // Also count all conversations currently or ever assigned to users
+    const userAssignedCounts = dbQuery<{ assigned_user_id: string; count: number }>(
+      `SELECT assigned_user_id, COUNT(*) as count FROM conversations WHERE organization_id = ? AND assigned_user_id IS NOT NULL GROUP BY assigned_user_id`,
+      [orgId]
+    );
+    const assignedMap: Record<string, number> = {};
+    userAssignedCounts.forEach(r => { assignedMap[r.assigned_user_id] = r.count; });
+
+    const attendantsPerformance = users.map((u) => {
+      const perf = userStatsMap[u.id] || { totalChats: 0, won: 0, revenue: 0 };
+      const totalChats = Math.max(perf.totalChats, assignedMap[u.id] || 0);
+      const won = perf.won;
+      const rate = totalChats > 0 ? `${Math.round((won / totalChats) * 1000) / 10}%` : '0%';
+      const revenue = `R$ ${perf.revenue.toLocaleString('pt-BR')}`;
+      const avgTime = '-';
+      const score = '★ 5.0';
+
+      return {
+        id: u.id,
+        name: u.name,
+        role: u.role,
+        status: u.status,
+        avatar: u.avatar,
+        totalChats,
+        won,
+        rate,
+        revenue,
+        avgTime,
+        score,
+      };
+    });
+
+    res.json({
+      salesStats: {
+        totalClosed,
+        wonCount,
+        lostCount,
+        conversionRate,
+        totalSalesVolume,
+        avgTicket,
+        lostReasons,
+      },
+      destinationStats,
+      attendantsPerformance,
+    });
+  } catch (error) {
+    console.error('Error getting commercial reports:', error);
+    res.status(500).json({ error: 'Erro ao gerar relatório comercial.' });
   }
 });
 

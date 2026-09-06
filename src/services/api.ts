@@ -696,8 +696,8 @@ class ApiService {
         myCount: this.localConversations.filter(c => c.assigned_user_id === this.currentUser?.id && c.status === 'OPEN').length,
         closedTodayCount: this.localConversations.filter(c => c.status === 'CLOSED').length,
         totalCustomersCount: this.localCustomers.length,
-        avgResponseMinutes: 4.2,
-        avgHandleMinutes: 14.8,
+        avgResponseMinutes: 0,
+        avgHandleMinutes: 0,
       };
     }
 
@@ -710,8 +710,65 @@ class ApiService {
         myCount: this.localConversations.filter(c => c.assigned_user_id === this.currentUser?.id && c.status === 'OPEN').length,
         closedTodayCount: this.localConversations.filter(c => c.status === 'CLOSED').length,
         totalCustomersCount: this.localCustomers.length,
-        avgResponseMinutes: 4.2,
-        avgHandleMinutes: 14.8,
+        avgResponseMinutes: 0,
+        avgHandleMinutes: 0,
+      };
+    }
+  }
+
+  public async getCommercialReports(): Promise<{
+    salesStats: {
+      totalClosed: number;
+      wonCount: number;
+      lostCount: number;
+      conversionRate: number;
+      totalSalesVolume: number;
+      avgTicket: number;
+      lostReasons: { reason: string; count: number; percent: number }[];
+    };
+    destinationStats: { name: string; count: number; category: string; percentage: number }[];
+    attendantsPerformance: {
+      id: string;
+      name: string;
+      role: string;
+      status: string;
+      avatar?: string;
+      totalChats: number;
+      won: number;
+      rate: string;
+      revenue: string;
+      avgTime: string;
+      score: string;
+    }[];
+  }> {
+    try {
+      return await this.request('/conversations/reports/commercial');
+    } catch {
+      // Return 0-state if DB error or offline
+      return {
+        salesStats: {
+          totalClosed: 0,
+          wonCount: 0,
+          lostCount: 0,
+          conversionRate: 0,
+          totalSalesVolume: 0,
+          avgTicket: 0,
+          lostReasons: [],
+        },
+        destinationStats: [],
+        attendantsPerformance: this.localUsers.map(u => ({
+          id: u.id,
+          name: u.name,
+          role: u.role,
+          status: u.status,
+          avatar: u.avatar,
+          totalChats: 0,
+          won: 0,
+          rate: '0%',
+          revenue: 'R$ 0',
+          avgTime: '-',
+          score: '★ 5.0',
+        })),
       };
     }
   }

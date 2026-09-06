@@ -23,13 +23,13 @@ interface DashboardViewProps {
 export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigateToChat }) => {
   const { user } = useAuth();
   const [metrics, setMetrics] = useState({
-    waitingCount: 6,
-    openCount: 8,
-    myCount: 3,
-    closedTodayCount: 6,
-    totalCustomersCount: 10,
-    avgResponseMinutes: 4.2,
-    avgHandleMinutes: 18.5,
+    waitingCount: 0,
+    openCount: 0,
+    myCount: 0,
+    closedTodayCount: 0,
+    totalCustomersCount: 0,
+    avgResponseMinutes: 0,
+    avgHandleMinutes: 0,
   });
 
   const [attendants, setAttendants] = useState<User[]>([]);
