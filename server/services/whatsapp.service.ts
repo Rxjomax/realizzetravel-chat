@@ -659,42 +659,9 @@ export class WhatsAppService {
         ]
       );
 
-      // 4. Check Business Hours & Send Automated WhatsApp Message
-      const hoursCheck = this.isWithinBusinessHours(settings);
-
-      if (isNewConv) {
-        if (!hoursCheck.isWithin && settings.outOfHoursMessage && settings.outOfHoursMessage.trim()) {
-          autoReplyMessageContent = settings.outOfHoursMessage.trim();
-        } else if (hoursCheck.isWithin && settings.welcomeMessage && settings.welcomeMessage.trim()) {
-          autoReplyMessageContent = settings.welcomeMessage.trim();
-        }
-      } else if (!hoursCheck.isWithin && settings.outOfHoursMessage && settings.outOfHoursMessage.trim()) {
-        // For existing conversations outside business hours, check if notice was already sent recently (last 8 hours)
-        const recentNotice = dbGet<any>(
-          "SELECT id FROM messages WHERE conversation_id = ? AND sender_type = 'SYSTEM' AND created_at > ? LIMIT 1",
-          [conversation.id, new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString()]
-        );
-        if (!recentNotice) {
-          autoReplyMessageContent = settings.outOfHoursMessage.trim();
-        }
-      }
-
-      if (autoReplyMessageContent) {
-        autoReplyTime = new Date(Date.now() + 500).toISOString();
-        autoReplyMsgId = `msg_auto_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-
-        dbRun(
-          `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, status, created_at)
-           VALUES (?, ?, ?, 'SYSTEM', 'system_bot', 'text', ?, 'delivered', ?)`,
-          [autoReplyMsgId, organizationId, conversation.id, autoReplyMessageContent, autoReplyTime]
-        );
-
-        dbRun('UPDATE conversations SET last_message_at = ?, updated_at = ? WHERE id = ?', [
-          autoReplyTime,
-          autoReplyTime,
-          conversation.id,
-        ]);
-      }
+      // 4. Inbound message processed
+      // Auto-reply automated outgoing WhatsApp message is DISABLED to prevent sending unsolicited messages to clients
+      autoReplyMessageContent = null;
 
       // Customer message payload
       const customerMsgPayload = {
@@ -724,7 +691,7 @@ export class WhatsAppService {
             priority: 'MEDIUM',
             assignedUserId,
             assignedUser: assignedUserObj,
-            lastMessageAt: autoReplyTime || now,
+            lastMessageAt: now,
           },
           organizationId
         );
@@ -752,32 +719,6 @@ export class WhatsAppService {
         );
       }
     });
-
-    // Send auto reply asynchronously through WhatsApp API & broadcast
-    if (autoReplyMessageContent) {
-      this.sendTextMessage(phone, autoReplyMessageContent, organizationId).catch((err) => {
-        console.error('Error dispatching automated message to WhatsApp:', err);
-      });
-
-      broadcastEvent(
-        'message:new',
-        {
-          conversationId: createdConversationId,
-          message: {
-            id: autoReplyMsgId,
-            organization_id: organizationId,
-            conversation_id: createdConversationId,
-            sender_type: 'SYSTEM',
-            sender_id: 'system_bot',
-            message_type: 'text',
-            content: autoReplyMessageContent,
-            status: 'delivered',
-            created_at: autoReplyTime,
-          },
-        },
-        organizationId
-      );
-    }
 
     return {
       conversationId: createdConversationId,

@@ -439,6 +439,8 @@ class ApiService {
     events: any[];
     notes: any[];
   }> {
+    this.loadLocalStorageState();
+
     if (this.isFallbackMode) {
       const conv = this.localConversations.find(c => c.id === id) || this.localConversations[0];
       const msgs = this.localMessages[id] || [];
@@ -460,7 +462,28 @@ class ApiService {
     }
 
     try {
-      return await this.request(`/conversations/${id}`);
+      const data = await this.request<{
+        conversation: Conversation;
+        messages: Message[];
+        events: any[];
+        notes: any[];
+      }>(`/conversations/${id}`);
+      if (data && Array.isArray(data.messages)) {
+        const localMsgs = this.localMessages[id] || [];
+        // Combine without duplicates
+        const combined = [...data.messages];
+        for (const lm of localMsgs) {
+          if (!combined.some(m => m.id === lm.id || (m.content === lm.content && Math.abs(new Date(m.created_at).getTime() - new Date(lm.created_at).getTime()) < 3000))) {
+            combined.push(lm);
+          }
+        }
+        combined.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        return {
+          ...data,
+          messages: combined,
+        };
+      }
+      return data;
     } catch {
       const conv = this.localConversations.find(c => c.id === id) || this.localConversations[0];
       const msgs = this.localMessages[id] || [];
@@ -619,6 +642,7 @@ class ApiService {
     if (!cleanPhone || cleanPhone.length < 8) return null;
 
     const isStatusOrDelivery =
+      body.error !== undefined ||
       body.type === 'DeliveryCallback' ||
       body.type === 'MessageStatusCallback' ||
       body.deliveryStatus !== undefined ||

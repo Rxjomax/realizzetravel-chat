@@ -112,8 +112,12 @@ export class WebhookRelayService {
               const eventPayload = JSON.parse(jsonStr);
               const body = eventPayload.body || eventPayload;
 
-              console.log('📬 REAL WHATSAPP INBOUND MESSAGE RECEIVED VIA RELAY:', JSON.stringify(body).slice(0, 200));
-              WhatsAppService.handleInboundWebhook(body);
+              if (body.error) {
+                // Delivery/gateway feedback
+                WhatsAppService.handleInboundWebhook(body);
+              } else if (body.phone || body.senderPhone || body.from || body.chatId) {
+                WhatsAppService.handleInboundWebhook(body);
+              }
             } catch (parseErr) {
               // Ignore ping or malformed event
             }
