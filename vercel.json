@@ -2,6 +2,10 @@
   "version": 2,
   "rewrites": [
     {
+      "source": "/api/webhooks/whatsapp",
+      "destination": "/api/webhooks/whatsapp"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/index"
     },
