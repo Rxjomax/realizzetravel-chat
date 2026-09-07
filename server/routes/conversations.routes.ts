@@ -246,7 +246,7 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
         c.id, c.organization_id, c.customer_id, c.assigned_user_id, c.status, c.priority,
         c.created_at, c.updated_at, c.closed_at, c.closed_by_user_id, c.last_message_at,
         cust.name as customer_name, cust.phone as customer_phone, cust.email as customer_email,
-        cust.destination_interest, cust.travel_date, cust.passenger_count, cust.budget, cust.notes as customer_notes,
+        cust.destination_interest, cust.travel_date, cust.passenger_count, cust.budget, cust.notes as customer_notes, cust.avatar as customer_avatar,
         u.name as assigned_user_name, u.email as assigned_user_email, u.avatar as assigned_user_avatar
       FROM conversations c
       JOIN customers cust ON cust.id = c.customer_id
@@ -317,6 +317,7 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
           passenger_count: r.passenger_count,
           budget: r.budget,
           notes: r.customer_notes,
+          avatar: r.customer_avatar,
         },
         assigned_user: r.assigned_user_id
           ? {
@@ -349,7 +350,7 @@ conversationsRouter.get('/:id', authenticateToken, (req: AuthenticatedRequest, r
         c.id, c.organization_id, c.customer_id, c.assigned_user_id, c.status, c.priority,
         c.created_at, c.updated_at, c.closed_at, c.closed_by_user_id, c.last_message_at,
         cust.name as customer_name, cust.phone as customer_phone, cust.email as customer_email,
-        cust.destination_interest, cust.travel_date, cust.passenger_count, cust.budget, cust.notes as customer_notes,
+        cust.destination_interest, cust.travel_date, cust.passenger_count, cust.budget, cust.notes as customer_notes, cust.avatar as customer_avatar,
         u.name as assigned_user_name, u.email as assigned_user_email, u.avatar as assigned_user_avatar
       FROM conversations c
       JOIN customers cust ON cust.id = c.customer_id
@@ -363,13 +364,15 @@ conversationsRouter.get('/:id', authenticateToken, (req: AuthenticatedRequest, r
       return;
     }
 
+    // Retrieve all messages for this conversation, plus prior messages with this customer across previous tickets
     const messages = dbQuery<any>(
-      `SELECT m.*, u.name as sender_name, u.avatar as sender_avatar
+      `SELECT DISTINCT m.*, u.name as sender_name, u.avatar as sender_avatar
        FROM messages m
        LEFT JOIN users u ON u.id = m.sender_id
        WHERE m.conversation_id = ?
+          OR (m.conversation_id IN (SELECT id FROM conversations WHERE customer_id = ?))
        ORDER BY m.created_at ASC`,
-      [convId]
+      [convId, conv.customer_id]
     );
 
     const events = dbQuery<any>(
@@ -403,6 +406,7 @@ conversationsRouter.get('/:id', authenticateToken, (req: AuthenticatedRequest, r
           passenger_count: conv.passenger_count,
           budget: conv.budget,
           notes: conv.customer_notes,
+          avatar: conv.customer_avatar,
         },
         assigned_user: conv.assigned_user_id
           ? {

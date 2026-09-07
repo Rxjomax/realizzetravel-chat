@@ -33,6 +33,7 @@ export interface Customer {
   travel_date?: string;
   passenger_count?: number;
   budget?: string;
+  avatar?: string;
   auto_extracted?: boolean;
   created_at: string;
   updated_at: string;
@@ -128,7 +129,7 @@ export interface AuditLog {
   user_name?: string;
 }
 
-export type WhatsAppProviderType = 'META_CLOUD' | 'QR_CODE' | 'Z_API';
+export type WhatsAppProviderType = 'META_CLOUD' | 'EVOLUTION_API' | 'QR_CODE';
 
 export interface WhatsAppConfig {
   providerType?: WhatsAppProviderType;
@@ -137,16 +138,14 @@ export interface WhatsAppConfig {
   businessAccountId?: string;
   accessToken?: string;
   verifyToken?: string;
-  // QR Code / Web Gateway (Evolution API, Z-API, Baileys)
+  // Evolution API (Conexão QR Code Gratuita / Open Source)
   instanceName?: string;
   gatewayUrl?: string;
   apiKey?: string;
-  // Z-API Native
-  zapiInstanceId?: string;
-  zapiToken?: string;
-  zapiClientToken?: string;
   qrCodeBase64?: string | null;
   phoneConnected?: string | null;
+  verifiedName?: string | null;
+  qualityRating?: string | null;
   batteryLevel?: number | null;
   status: 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING' | 'QR_READY';
 }

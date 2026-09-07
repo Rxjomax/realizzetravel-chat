@@ -73,7 +73,7 @@ customersRouter.put('/:id', authenticateToken, (req: AuthenticatedRequest, res: 
   try {
     const orgId = req.user!.organization_id;
     const customerId = req.params.id;
-    const { name, phone, email, notes, destination_interest, travel_date, passenger_count, budget } =
+    const { name, phone, email, notes, destination_interest, travel_date, passenger_count, budget, avatar } =
       req.body;
 
     const now = new Date().toISOString();
@@ -88,6 +88,7 @@ customersRouter.put('/:id', authenticateToken, (req: AuthenticatedRequest, res: 
            travel_date = COALESCE(?, travel_date),
            passenger_count = COALESCE(?, passenger_count),
            budget = COALESCE(?, budget),
+           avatar = COALESCE(?, avatar),
            updated_at = ?
        WHERE id = ? AND organization_id = ?`,
       [
@@ -99,6 +100,7 @@ customersRouter.put('/:id', authenticateToken, (req: AuthenticatedRequest, res: 
         travel_date || null,
         passenger_count || null,
         budget?.trim() || null,
+        avatar !== undefined ? (avatar?.trim() || null) : null,
         now,
         customerId,
         orgId,

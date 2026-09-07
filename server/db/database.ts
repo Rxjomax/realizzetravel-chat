@@ -56,6 +56,9 @@ export async function getDatabase(): Promise<SqlJsDatabase> {
 
   if (schemaSql) {
     dbInstance.run(schemaSql);
+    try {
+      dbInstance.run('ALTER TABLE customers ADD COLUMN avatar TEXT;');
+    } catch {}
     saveDatabase();
   }
 

@@ -764,8 +764,19 @@ export const ChatDeskView: React.FC = () => {
                   }`}
                 >
                   {/* Customer Avatar */}
-                  <div className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-xs text-slate-700 shrink-0 mt-0.5 shadow-xs">
-                    {c.customer?.name?.charAt(0) || 'C'}
+                  <div className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-xs text-slate-700 shrink-0 mt-0.5 shadow-xs overflow-hidden">
+                    {c.customer?.avatar ? (
+                      <img
+                        src={c.customer.avatar}
+                        alt={c.customer.name}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      c.customer?.name?.charAt(0) || 'C'
+                    )}
                   </div>
 
                   <div className="flex-1 min-w-0">
@@ -829,8 +840,19 @@ export const ChatDeskView: React.FC = () => {
             {/* Top Bar of Active Conversation */}
             <div className="h-16 px-5 border-b border-slate-200 bg-white flex items-center justify-between gap-3 shadow-xs shrink-0">
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-10 h-10 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center font-bold text-sm text-emerald-700 shrink-0">
-                  {selectedConv.customer?.name?.charAt(0)}
+                <div className="w-10 h-10 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center font-bold text-sm text-emerald-700 shrink-0 overflow-hidden shadow-2xs">
+                  {selectedConv.customer?.avatar ? (
+                    <img
+                      src={selectedConv.customer.avatar}
+                      alt={selectedConv.customer.name}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                  ) : (
+                    selectedConv.customer?.name?.charAt(0) || 'C'
+                  )}
                 </div>
                 <div className="min-w-0">
                   <div className="font-bold text-sm text-slate-800 truncate flex items-center gap-2">
@@ -1165,8 +1187,19 @@ export const ChatDeskView: React.FC = () => {
             </h2>
 
             <div className="flex flex-col items-center mb-6">
-              <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center text-2xl text-slate-500 font-bold mb-3 border border-slate-200">
-                {selectedConv.customer?.name?.charAt(0) || 'C'}
+              <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center text-2xl text-slate-500 font-bold mb-3 border border-slate-200 overflow-hidden shadow-xs">
+                {selectedConv.customer?.avatar ? (
+                  <img
+                    src={selectedConv.customer.avatar}
+                    alt={selectedConv.customer.name}
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  selectedConv.customer?.name?.charAt(0) || 'C'
+                )}
               </div>
               <p className="font-bold text-slate-800 text-sm text-center">{selectedConv.customer?.name}</p>
               <p className="text-xs text-slate-500 mt-0.5">{formatPhoneNumber(selectedConv.customer?.phone)}</p>

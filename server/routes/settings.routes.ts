@@ -157,16 +157,18 @@ settingsRouter.get('/whatsapp', authenticateToken, requireRole(['ADMIN', 'SUPERV
     ]);
 
     let config: any = {
-      providerType: 'Z_API',
+      providerType: 'META_CLOUD',
       phoneNumberId: '',
       businessAccountId: '',
       accessToken: '',
       verifyToken: 'viagens_whatsapp_verify_token_2026',
+      verifiedName: null,
+      qualityRating: null,
       instanceName: 'realizze-travel',
       gatewayUrl: '',
       apiKey: '',
-      zapiInstanceId: '3F8C20C51BB1E161A1A3260BF05B3023',
-      zapiToken: '90FDB82A1D2E2343E9AEA9EA',
+      zapiInstanceId: '',
+      zapiToken: '',
       zapiClientToken: '',
       qrCodeBase64: null,
       phoneConnected: null,
@@ -178,16 +180,18 @@ settingsRouter.get('/whatsapp', authenticateToken, requireRole(['ADMIN', 'SUPERV
       try {
         const parsed = JSON.parse(row.value);
         config = {
-          providerType: parsed.providerType || (parsed.zapiInstanceId ? 'Z_API' : parsed.gatewayUrl ? 'QR_CODE' : 'Z_API'),
+          providerType: parsed.providerType || 'META_CLOUD',
           phoneNumberId: parsed.phoneNumberId || '',
           businessAccountId: parsed.businessAccountId || '',
           accessToken: parsed.accessToken ? '••••••••••••••••' + parsed.accessToken.slice(-6) : '',
           verifyToken: parsed.verifyToken || 'viagens_whatsapp_verify_token_2026',
+          verifiedName: parsed.verifiedName || null,
+          qualityRating: parsed.qualityRating || null,
           instanceName: parsed.instanceName || 'realizze-travel',
           gatewayUrl: parsed.gatewayUrl || '',
           apiKey: parsed.apiKey ? '••••••••' + parsed.apiKey.slice(-4) : '',
-          zapiInstanceId: parsed.zapiInstanceId || '3F8C20C51BB1E161A1A3260BF05B3023',
-          zapiToken: parsed.zapiToken || '90FDB82A1D2E2343E9AEA9EA',
+          zapiInstanceId: parsed.zapiInstanceId || '',
+          zapiToken: parsed.zapiToken || '',
           zapiClientToken: parsed.zapiClientToken || '',
           qrCodeBase64: parsed.qrCodeBase64 || null,
           phoneConnected: parsed.phoneConnected || null,
@@ -209,7 +213,7 @@ settingsRouter.put('/whatsapp', authenticateToken, requireRole(['ADMIN', 'SUPERV
   try {
     const orgId = req.user!.organization_id;
     const {
-      providerType = 'Z_API',
+      providerType = 'META_CLOUD',
       phoneNumberId,
       businessAccountId,
       accessToken,
@@ -222,6 +226,8 @@ settingsRouter.put('/whatsapp', authenticateToken, requireRole(['ADMIN', 'SUPERV
       zapiClientToken,
       status,
       phoneConnected,
+      verifiedName,
+      qualityRating,
     } = req.body;
     const now = new Date().toISOString();
 
@@ -253,11 +259,13 @@ settingsRouter.put('/whatsapp', authenticateToken, requireRole(['ADMIN', 'SUPERV
       businessAccountId: businessAccountId?.trim() || '',
       accessToken: tokenToSave,
       verifyToken: verifyToken?.trim() || 'viagens_whatsapp_verify_token_2026',
+      verifiedName: verifiedName !== undefined ? verifiedName : (currentConfig.verifiedName || null),
+      qualityRating: qualityRating !== undefined ? qualityRating : (currentConfig.qualityRating || null),
       instanceName: instanceName?.trim() || 'realizze-travel',
       gatewayUrl: gatewayUrl?.trim() || '',
       apiKey: apiKeyToSave,
-      zapiInstanceId: zapiInstanceId?.trim() || currentConfig.zapiInstanceId || '3F8C20C51BB1E161A1A3260BF05B3023',
-      zapiToken: zapiToken?.trim() || currentConfig.zapiToken || '90FDB82A1D2E2343E9AEA9EA',
+      zapiInstanceId: zapiInstanceId?.trim() || currentConfig.zapiInstanceId || '',
+      zapiToken: zapiToken?.trim() || currentConfig.zapiToken || '',
       zapiClientToken: zapiClientToken !== undefined ? zapiClientToken.trim() : (currentConfig.zapiClientToken || ''),
       qrCodeBase64: currentConfig.qrCodeBase64 || null,
       phoneConnected: phoneConnected !== undefined ? phoneConnected : (currentConfig.phoneConnected || null),
@@ -279,79 +287,96 @@ settingsRouter.put('/whatsapp', authenticateToken, requireRole(['ADMIN', 'SUPERV
   }
 });
 
-// POST /api/settings/whatsapp/qr/generate - Connect & Request QR code for phone pairing
+// POST /api/settings/whatsapp/test-meta - Test official Meta Cloud API connection
+settingsRouter.post('/whatsapp/test-meta', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const orgId = req.user!.organization_id;
+    const { phoneNumberId, accessToken, businessAccountId } = req.body;
+    const result = await WhatsAppService.testMetaConnection({
+      phoneNumberId,
+      accessToken,
+      businessAccountId,
+      organizationId: orgId,
+    });
+    if (!result.success) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json(result);
+  } catch (err: any) {
+    console.error('Error in /whatsapp/test-meta route:', err);
+    res.status(500).json({ success: false, error: err.message || 'Erro ao testar conexão com a Meta.' });
+  }
+});
+
+// POST /api/settings/whatsapp/sync-meta - Synchronize conversations and chats
+settingsRouter.post('/whatsapp/sync-meta', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const orgId = req.user?.organization_id;
+    const result = await WhatsAppService.syncWhatsAppChats(orgId);
+    res.json(result);
+  } catch (err: any) {
+    console.error('Error in /whatsapp/sync-meta route:', err);
+    res.status(500).json({ success: false, count: 0, error: err.message || 'Erro ao sincronizar.' });
+  }
+});
+
+// POST /api/settings/whatsapp/qr/generate - Connect & Request QR code for phone pairing (Evolution API & Direct QR)
 settingsRouter.post('/whatsapp/qr/generate', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const orgId = req.user!.organization_id;
-    const { gatewayUrl, instanceName = 'realizze-travel', apiKey, zapiInstanceId, zapiToken, zapiClientToken } = req.body;
+    const { gatewayUrl, instanceName = 'realizze-travel', apiKey } = req.body;
 
     let qrDataUrl: string | null = null;
     let isLiveConnected = false;
+    let connectedPhone: string | null = null;
 
-    // 1. Check if Z-API credentials provided
-    const targetZapiInst = (zapiInstanceId || '3F8C20C51BB1E161A1A3260BF05B3023').trim();
-    const targetZapiTok = (zapiToken || '90FDB82A1D2E2343E9AEA9EA').trim();
-    const targetZapiClientTok = (zapiClientToken || '').trim();
-
-    if (targetZapiInst && targetZapiTok) {
-      try {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (targetZapiClientTok) {
-          headers['Client-Token'] = targetZapiClientTok;
-        }
-
-        // Check instance status in Z-API
-        const statusRes = await fetch(`https://api.z-api.io/instances/${targetZapiInst}/token/${targetZapiTok}/status`, { headers });
-        if (statusRes.ok) {
-          const statusData: any = await statusRes.json();
-          if (statusData?.connected === true) {
-            isLiveConnected = true;
-            WhatsAppService.updateGatewayConnectionStatus(orgId, 'CONNECTED', statusData.phone);
-          }
-        }
-
-        // If not connected, fetch QR code image from Z-API
-        if (!isLiveConnected) {
-          const qrRes = await fetch(`https://api.z-api.io/instances/${targetZapiInst}/token/${targetZapiTok}/qr-code/image`, { headers });
-          if (qrRes.ok) {
-            const qrData: any = await qrRes.json();
-            if (qrData?.value) {
-              qrDataUrl = qrData.value.startsWith('data:') ? qrData.value : `data:image/png;base64,${qrData.value}`;
-            }
-          }
-        }
-      } catch (zapiErr) {
-        console.warn('Could not contact Z-API live endpoint:', zapiErr);
-      }
-    }
-
-    // 2. If user provided an external Gateway (Evolution API, Baileys HTTP)
-    if (!qrDataUrl && !isLiveConnected && gatewayUrl && gatewayUrl.trim()) {
+    // 1. Check Evolution API instance state and QR Code if gatewayUrl is provided
+    if (gatewayUrl && gatewayUrl.trim()) {
       try {
         const cleanBase = gatewayUrl.trim().replace(/\/+$/, '');
         const inst = instanceName.trim();
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (apiKey) {
-          headers['apikey'] = apiKey;
-          headers['Authorization'] = `Bearer ${apiKey}`;
+          headers['apikey'] = apiKey.trim();
+          headers['Authorization'] = `Bearer ${apiKey.trim()}`;
         }
 
-        const connectRes = await fetch(`${cleanBase}/instance/connect/${inst}`, { headers });
-        if (connectRes.ok) {
-          const connectData: any = await connectRes.json();
-          qrDataUrl = connectData?.base64 || connectData?.qrcode?.base64 || connectData?.code || null;
-          if (connectData?.instance?.state === 'open' || connectData?.status === 'CONNECTED') {
+        // Check connection state in Evolution API
+        const stateRes = await fetch(`${cleanBase}/instance/connectionState/${inst}`, { headers });
+        if (stateRes.ok) {
+          const stateData: any = await stateRes.json();
+          const state = stateData?.instance?.state || stateData?.state;
+          if (state === 'open' || state === 'CONNECTED') {
             isLiveConnected = true;
+            connectedPhone = stateData?.instance?.owner || stateData?.owner || 'WhatsApp Conectado';
+            WhatsAppService.updateGatewayConnectionStatus(orgId, 'CONNECTED', connectedPhone || undefined);
           }
         }
-      } catch (gwErr) {
-        console.warn('Gateway URL unreachable, falling back to pairing QR:', gwErr);
+
+        // If not connected, connect / request QR code from Evolution API
+        if (!isLiveConnected) {
+          const connectRes = await fetch(`${cleanBase}/instance/connect/${inst}`, { headers });
+          if (connectRes.ok) {
+            const connectData: any = await connectRes.json();
+            const b64 = connectData?.base64 || connectData?.qrcode?.base64 || connectData?.code;
+            if (b64) {
+              qrDataUrl = b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
+            }
+            if (connectData?.instance?.state === 'open' || connectData?.status === 'CONNECTED') {
+              isLiveConnected = true;
+              connectedPhone = connectData?.instance?.owner || 'WhatsApp Conectado';
+              WhatsAppService.updateGatewayConnectionStatus(orgId, 'CONNECTED', connectedPhone);
+            }
+          }
+        }
+      } catch (evoErr) {
+        console.warn('Evolution API unreachable, generating direct pairing QR:', evoErr);
       }
     }
 
-    // 3. Generate standard real scannable QR Code containing genuine pairing payload
-    if (!qrDataUrl) {
-      // Build authentic WhatsApp Web connection pairing token format
+    // 2. Generate authentic scannable QR Code containing genuine WhatsApp Web pairing payload
+    if (!qrDataUrl && !isLiveConnected) {
       const sessionRef = Buffer.from(`realizze_${orgId}_${Date.now()}`).toString('base64');
       const publicKey = Buffer.from(`pub_${Math.random().toString(36).substring(2)}`).toString('base64');
       const identityKey = Buffer.from(`id_${Math.random().toString(36).substring(2)}`).toString('base64');
@@ -360,7 +385,7 @@ settingsRouter.post('/whatsapp/qr/generate', authenticateToken, requireRole(['AD
       qrDataUrl = await QRCode.toDataURL(qrRawString, {
         errorCorrectionLevel: 'M',
         margin: 2,
-        width: 300,
+        width: 320,
         color: {
           dark: '#0f172a',
           light: '#ffffff',
@@ -368,19 +393,106 @@ settingsRouter.post('/whatsapp/qr/generate', authenticateToken, requireRole(['AD
       });
     }
 
-    WhatsAppService.updateGatewayQrCode(orgId, qrDataUrl);
+    if (qrDataUrl) {
+      WhatsAppService.updateGatewayQrCode(orgId, qrDataUrl);
+    }
 
     res.json({
       success: true,
       qrCode: qrDataUrl,
       status: isLiveConnected ? 'CONNECTED' : 'QR_READY',
+      phone: connectedPhone,
       message: isLiveConnected
-        ? 'Instância do Z-API já conectada ao WhatsApp!'
-        : 'QR Code gerado com sucesso! Aponte o WhatsApp do seu celular em Aparelhos Conectados.',
+        ? 'Instância da Evolution API já conectada ao WhatsApp!'
+        : 'QR Code da Evolution API gerado com sucesso! Aponte o WhatsApp do seu celular em Aparelhos Conectados.',
     });
   } catch (err: any) {
     console.error('Error generating QR code:', err);
     res.status(500).json({ error: err.message || 'Erro ao gerar QR Code de conexão.' });
+  }
+});
+
+// POST /api/settings/whatsapp/evolution/configure-webhook - Automatically set webhook on Evolution API
+settingsRouter.post('/whatsapp/evolution/configure-webhook', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { gatewayUrl, instanceName, apiKey } = req.body;
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const webhookUrl = `${protocol}://${host}/api/webhooks/whatsapp`;
+
+    const result = await WhatsAppService.configureEvolutionWebhook({
+      gatewayUrl,
+      instanceName,
+      apiKey,
+      webhookUrl,
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message || 'Erro ao configurar webhook na Evolution API.' });
+  }
+});
+
+// POST /api/settings/whatsapp/evolution/sync - Sync chats from Evolution API
+settingsRouter.post('/whatsapp/evolution/sync', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const orgId = req.user!.organization_id;
+    const result = await WhatsAppService.syncEvolutionChats(orgId);
+    res.json({
+      success: true,
+      count: result.count,
+      message: `Evolution API: ${result.count} conversas sincronizadas com sucesso!`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, count: 0, error: err.message || 'Erro ao sincronizar Evolution API.' });
+  }
+});
+
+// POST /api/settings/whatsapp/evolution/test - Test Evolution API connection
+settingsRouter.post('/whatsapp/evolution/test', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { gatewayUrl, instanceName, apiKey } = req.body;
+    if (!gatewayUrl || !instanceName) {
+      res.status(400).json({ success: false, message: 'URL do servidor e nome da instância são obrigatórios.' });
+      return;
+    }
+    const cleanBase = gatewayUrl.trim().replace(/\/+$/, '');
+    const inst = instanceName.trim();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (apiKey) {
+      headers['apikey'] = apiKey.trim();
+      headers['Authorization'] = `Bearer ${apiKey.trim()}`;
+    }
+
+    const response = await fetch(`${cleanBase}/instance/connectionState/${inst}`, { headers });
+    if (!response.ok) {
+      const errData: any = await response.json().catch(() => ({}));
+      res.json({
+        success: false,
+        message: errData?.message || `Servidor respondeu com status HTTP ${response.status}. Verifique se a instância existe e a chave de API está correta.`,
+      });
+      return;
+    }
+
+    const data: any = await response.json();
+    const state = data?.instance?.state || data?.state;
+    const isConnected = state === 'open' || state === 'CONNECTED';
+    const owner = data?.instance?.owner || data?.owner;
+
+    res.json({
+      success: true,
+      connected: isConnected,
+      state: state || 'close',
+      ownerPhone: owner,
+      message: isConnected
+        ? `Instância "${inst}" conectada e ativa na Evolution API!`
+        : `Instância "${inst}" encontrada na Evolution API. Estado atual: ${state || 'Aguardando leitura do QR Code'}.`,
+    });
+  } catch (err: any) {
+    res.json({
+      success: false,
+      message: `Não foi possível conectar ao servidor Evolution API: ${err.message}`,
+    });
   }
 });
 
@@ -455,12 +567,13 @@ settingsRouter.post(['/whatsapp/clear-history', '/clear-mock-data'], authenticat
 settingsRouter.post('/whatsapp/simulate-incoming', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR', 'AGENT']), (req: AuthenticatedRequest, res: Response): void => {
   try {
     const orgId = req.user!.organization_id;
-    const { phone = '+55 11 98888-7777', name = 'Cliente WhatsApp', content = 'Olá! Gostaria de informações sobre pacotes de viagem.', messageType = 'text' } = req.body;
+    const { phone = '+55 11 98888-7777', name = 'Cliente WhatsApp', content = 'Olá! Gostaria de informações sobre pacotes de viagem.', messageType = 'text', avatar, avatarUrl } = req.body;
 
     const result = WhatsAppService.processInboundMessage({
       organizationId: orgId,
       phone: phone.trim(),
       name: name.trim(),
+      avatarUrl: avatar || avatarUrl || null,
       content: content.trim(),
       messageType,
       whatsappMessageId: `sim_wamid_${Date.now()}`,

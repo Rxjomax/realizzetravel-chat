@@ -517,27 +517,6 @@ class ApiService {
     const targetPhone = conv?.customer?.phone?.replace(/\D/g, '');
 
     // Attempt live Z-API direct send
-    if (targetPhone && targetPhone.length >= 8) {
-      try {
-        const instId = '3F8C20C51BB1E161A1A3260BF05B3023';
-        const token = '90FDB82A1D2E2343E9AEA9EA';
-        const clientToken = 'Fe48e93f5417c46258029658a1c13631aS';
-        fetch(`https://api.z-api.io/instances/${instId}/token/${token}/send-text`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Client-Token': clientToken,
-          },
-          body: JSON.stringify({
-            phone: targetPhone,
-            message: content,
-          }),
-        }).catch(e => console.warn('Direct Z-API message notification:', e));
-      } catch (err) {
-        console.warn('Direct Z-API send error:', err);
-      }
-    }
-
     if (!this.isFallbackMode) {
       try {
         const result = await this.request<{ message: Message }>(`/conversations/${conversationId}/messages`, {
@@ -655,7 +634,7 @@ class ApiService {
     }
 
     let conv = this.localConversations.find(c => c.customer?.phone?.replace(/\D/g, '') === cleanPhone);
-    let convId = conv ? conv.id : `conv_zapi_${cleanPhone}_0`;
+    let convId = conv ? conv.id : `conv_meta_${cleanPhone}_0`;
 
     const newMsg: Message = {
       id: msgId,
@@ -1109,11 +1088,13 @@ class ApiService {
   // Settings Endpoints
   public async getWhatsAppSettings(): Promise<{ config: WhatsAppConfig }> {
     const defaultConfig: WhatsAppConfig = {
-      providerType: 'QR_CODE',
+      providerType: 'META_CLOUD',
       phoneNumberId: '',
       businessAccountId: '',
       accessToken: '',
       verifyToken: 'viagens_whatsapp_verify_token_2026',
+      verifiedName: null,
+      qualityRating: null,
       instanceName: 'realizze-travel',
       gatewayUrl: '',
       apiKey: '',
@@ -1134,6 +1115,31 @@ class ApiService {
       }
       return { config: defaultConfig };
     }
+  }
+
+  public async testMetaConnection(params: {
+    phoneNumberId: string;
+    accessToken: string;
+    businessAccountId?: string;
+  }): Promise<{
+    success: boolean;
+    verifiedName?: string;
+    displayPhoneNumber?: string;
+    qualityRating?: string;
+    status?: string;
+    error?: string;
+  }> {
+    return await this.request('/settings/whatsapp/test-meta', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  public async updateCustomerAvatar(customerId: string, avatar: string): Promise<{ success: boolean; customer?: Customer }> {
+    return await this.request(`/customers/${customerId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ avatar }),
+    });
   }
 
   public async saveWhatsAppSettings(data: Partial<WhatsAppConfig>): Promise<{ success: boolean; message: string; config?: WhatsAppConfig }> {
@@ -1158,11 +1164,36 @@ class ApiService {
     gatewayUrl?: string;
     instanceName?: string;
     apiKey?: string;
-    zapiInstanceId?: string;
-    zapiToken?: string;
-    zapiClientToken?: string;
-  }): Promise<{ success: boolean; qrCode: string; status: string; message: string }> {
+  }): Promise<{ success: boolean; qrCode: string; status: string; phone?: string; message: string }> {
     return await this.request('/settings/whatsapp/qr/generate', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  public async configureEvolutionWebhook(params: {
+    gatewayUrl: string;
+    instanceName: string;
+    apiKey?: string;
+  }): Promise<{ success: boolean; message: string }> {
+    return await this.request('/settings/whatsapp/evolution/configure-webhook', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  public async syncEvolutionChats(): Promise<{ success: boolean; count: number; message: string }> {
+    return await this.request('/settings/whatsapp/evolution/sync', {
+      method: 'POST',
+    });
+  }
+
+  public async testEvolutionConnection(params: {
+    gatewayUrl: string;
+    instanceName: string;
+    apiKey?: string;
+  }): Promise<{ success: boolean; connected?: boolean; state?: string; ownerPhone?: string; message: string }> {
+    return await this.request('/settings/whatsapp/evolution/test', {
       method: 'POST',
       body: JSON.stringify(params),
     });
@@ -1179,6 +1210,8 @@ class ApiService {
     phone: string;
     name: string;
     content: string;
+    avatar?: string;
+    avatarUrl?: string;
   }): Promise<{ success: boolean; message: string; conversationId?: string; autoReplySent?: string }> {
     return await this.request('/settings/whatsapp/simulate-incoming', {
       method: 'POST',

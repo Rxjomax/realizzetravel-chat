@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS customers (
   travel_date TEXT,
   passenger_count INTEGER DEFAULT 1,
   budget TEXT,
+  avatar TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
