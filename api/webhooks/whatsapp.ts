@@ -47,9 +47,10 @@ export default async function handler(req: any, res: any) {
 
       // Tenta processar através da aplicação principal se disponível
       try {
-        const { WhatsAppService } = await import('../../server/services/whatsapp.service.js');
-        if (payload && WhatsAppService?.processIncomingWebhook) {
-          await WhatsAppService.processIncomingWebhook(payload);
+        const mod: any = await import('../../server/services/whatsapp.service.js');
+        const service = mod?.WhatsAppService;
+        if (payload && service && typeof service.handleInboundWebhook === 'function') {
+          service.handleInboundWebhook(payload);
         }
       } catch (procErr: any) {
         console.warn('Aviso ao processar webhook via WhatsAppService:', procErr?.message);
