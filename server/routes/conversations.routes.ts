@@ -245,6 +245,7 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
       SELECT
         c.id, c.organization_id, c.customer_id, c.assigned_user_id, c.status, c.priority,
         c.created_at, c.updated_at, c.closed_at, c.closed_by_user_id, c.last_message_at,
+        c.reminder_date, c.reminder_note, c.reminder_status,
         cust.name as customer_name, cust.phone as customer_phone, cust.email as customer_email,
         cust.destination_interest, cust.travel_date, cust.passenger_count, cust.budget, cust.notes as customer_notes, cust.avatar as customer_avatar,
         u.name as assigned_user_name, u.email as assigned_user_email, u.avatar as assigned_user_avatar
@@ -265,6 +266,8 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
       params.push(userId);
     } else if (normFilter === 'CLOSED' || normFilter === 'ENCERRADAS' || normFilter === 'FINALIZADAS') {
       sql += " AND c.status = 'CLOSED'";
+    } else if (normFilter === 'REMINDERS' || normFilter === 'RETORNOS' || normFilter === 'LEMBRETES') {
+      sql += " AND c.reminder_date IS NOT NULL AND c.reminder_status = 'PENDING'";
     }
 
     if (search && typeof search === 'string' && search.trim() !== '') {
@@ -307,6 +310,9 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
         closed_at: r.closed_at,
         closed_by_user_id: r.closed_by_user_id,
         last_message_at: r.last_message_at,
+        reminder_date: r.reminder_date || null,
+        reminder_note: r.reminder_note || null,
+        reminder_status: r.reminder_status || null,
         customer: {
           id: r.customer_id,
           name: r.customer_name,
@@ -349,6 +355,7 @@ conversationsRouter.get('/:id', authenticateToken, (req: AuthenticatedRequest, r
       `SELECT
         c.id, c.organization_id, c.customer_id, c.assigned_user_id, c.status, c.priority,
         c.created_at, c.updated_at, c.closed_at, c.closed_by_user_id, c.last_message_at,
+        c.reminder_date, c.reminder_note, c.reminder_status,
         cust.name as customer_name, cust.phone as customer_phone, cust.email as customer_email,
         cust.destination_interest, cust.travel_date, cust.passenger_count, cust.budget, cust.notes as customer_notes, cust.avatar as customer_avatar,
         u.name as assigned_user_name, u.email as assigned_user_email, u.avatar as assigned_user_avatar
@@ -815,5 +822,127 @@ conversationsRouter.post('/:id/reopen', authenticateToken, (req: AuthenticatedRe
   } catch (error) {
     console.error('Error reopening conversation:', error);
     res.status(500).json({ error: 'Erro ao reabrir conversa.' });
+  }
+});
+
+// POST /api/conversations/:id/reminder - Schedule or update follow-up reminder
+conversationsRouter.post('/:id/reminder', authenticateToken, (req: AuthenticatedRequest, res: Response): void => {
+  try {
+    const convId = req.params.id;
+    const userId = req.user!.id;
+    const orgId = req.user!.organization_id;
+    const { reminderDate, reminderNote } = req.body || {};
+
+    if (!reminderDate) {
+      res.status(400).json({ error: 'Data de retorno é obrigatória.' });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const noteText = reminderNote?.trim() || 'Aguardando retorno do cliente';
+
+    dbTransaction(() => {
+      dbRun(
+        "UPDATE conversations SET reminder_date = ?, reminder_note = ?, reminder_status = 'PENDING', updated_at = ? WHERE id = ? AND (organization_id = ? OR organization_id = 'org_realizzetravel' OR organization_id = 'org_voolivre')",
+        [reminderDate, noteText, now, convId, orgId]
+      );
+
+      dbRun(
+        'INSERT INTO conversation_events (id, conversation_id, user_id, event_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          `evt_remind_${Date.now()}`,
+          convId,
+          userId,
+          'REMINDER_SET',
+          JSON.stringify({ reminderDate, reminderNote: noteText, setBy: req.user!.name }),
+          now,
+        ]
+      );
+    });
+
+    broadcastEvent('conversation:updated', {
+      conversationId: convId,
+      reminder_date: reminderDate,
+      reminder_note: noteText,
+      reminder_status: 'PENDING',
+      updatedAt: now,
+    }, orgId);
+
+    res.json({
+      success: true,
+      message: 'Lembrete de retorno agendado com sucesso!',
+      reminderDate,
+      reminderNote: noteText,
+    });
+  } catch (error) {
+    console.error('Error setting conversation reminder:', error);
+    res.status(500).json({ error: 'Erro ao agendar lembrete de retorno.' });
+  }
+});
+
+// PATCH /api/conversations/:id/reminder/complete - Mark reminder as completed
+conversationsRouter.patch('/:id/reminder/complete', authenticateToken, (req: AuthenticatedRequest, res: Response): void => {
+  try {
+    const convId = req.params.id;
+    const userId = req.user!.id;
+    const orgId = req.user!.organization_id;
+    const now = new Date().toISOString();
+
+    dbTransaction(() => {
+      dbRun(
+        "UPDATE conversations SET reminder_status = 'COMPLETED', updated_at = ? WHERE id = ? AND (organization_id = ? OR organization_id = 'org_realizzetravel' OR organization_id = 'org_voolivre')",
+        [now, convId, orgId]
+      );
+
+      dbRun(
+        'INSERT INTO conversation_events (id, conversation_id, user_id, event_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          `evt_remind_done_${Date.now()}`,
+          convId,
+          userId,
+          'REMINDER_COMPLETED',
+          JSON.stringify({ completedBy: req.user!.name }),
+          now,
+        ]
+      );
+    });
+
+    broadcastEvent('conversation:updated', {
+      conversationId: convId,
+      reminder_status: 'COMPLETED',
+      updatedAt: now,
+    }, orgId);
+
+    res.json({ success: true, message: 'Lembrete de retorno marcado como concluído!' });
+  } catch (error) {
+    console.error('Error completing conversation reminder:', error);
+    res.status(500).json({ error: 'Erro ao concluir lembrete.' });
+  }
+});
+
+// DELETE /api/conversations/:id/reminder - Remove reminder
+conversationsRouter.delete('/:id/reminder', authenticateToken, (req: AuthenticatedRequest, res: Response): void => {
+  try {
+    const convId = req.params.id;
+    const orgId = req.user!.organization_id;
+    const now = new Date().toISOString();
+
+    dbRun(
+      "UPDATE conversations SET reminder_date = NULL, reminder_note = NULL, reminder_status = NULL, updated_at = ? WHERE id = ? AND (organization_id = ? OR organization_id = 'org_realizzetravel' OR organization_id = 'org_voolivre')",
+      [now, convId, orgId]
+    );
+
+    broadcastEvent('conversation:updated', {
+      conversationId: convId,
+      reminder_date: null,
+      reminder_note: null,
+      reminder_status: null,
+      updatedAt: now,
+    }, orgId);
+
+    res.json({ success: true, message: 'Lembrete de retorno removido com sucesso.' });
+  } catch (error) {
+    console.error('Error removing conversation reminder:', error);
+    res.status(500).json({ error: 'Erro ao remover lembrete.' });
   }
 });

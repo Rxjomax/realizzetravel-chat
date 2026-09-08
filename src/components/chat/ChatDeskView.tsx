@@ -28,6 +28,8 @@ import {
   ArrowDown,
   RefreshCw,
   MessageSquarePlus,
+  BellRing,
+  Trash2,
 } from 'lucide-react';
 import { extractTravelParameters, hasExtractedAnyInfo, parseBudgetValue } from '../../utils/travelExtractor';
 import { formatPhoneNumber } from '../../utils/formatters';
@@ -55,7 +57,8 @@ export const ChatDeskView: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [events, setEvents] = useState<any[]>([]);
   const [notes, setNotes] = useState<any[]>([]);
-  const [activeFilter, setActiveFilter] = useState<'ALL' | 'WAITING' | 'OPEN' | 'MY' | 'CLOSED'>('ALL');
+  const [activeFilter, setActiveFilter] = useState<'ALL' | 'WAITING' | 'OPEN' | 'MY' | 'CLOSED' | 'REMINDERS'>('ALL');
+  const [allConversationsForStats, setAllConversationsForStats] = useState<Conversation[]>([]);
   const [agentsMap, setAgentsMap] = useState<Record<string, User>>({});
   const [includeAgentPrefix, setIncludeAgentPrefix] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -64,6 +67,12 @@ export const ChatDeskView: React.FC = () => {
   const [isAssigning, setIsAssigning] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Follow-up Reminder Modal State
+  const [reminderModalOpen, setReminderModalOpen] = useState(false);
+  const [reminderDate, setReminderDate] = useState('');
+  const [reminderNote, setReminderNote] = useState('');
+  const [isSavingReminder, setIsSavingReminder] = useState(false);
 
   // Simulation Modal State (Customer Inbound Test)
   const [isSimulateModalOpen, setIsSimulateModalOpen] = useState(false);
@@ -100,6 +109,7 @@ export const ChatDeskView: React.FC = () => {
   // Auto-scroll and Pin Reply Box Refs & States
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageContainerRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [isSyncingWhatsApp, setIsSyncingWhatsApp] = useState(false);
 
@@ -137,12 +147,17 @@ export const ChatDeskView: React.FC = () => {
 
   const fetchConversations = useCallback(async () => {
     try {
-      const data = await api.getConversations(activeFilter === 'ALL' ? undefined : activeFilter, searchQuery);
+      const filterParam = activeFilter === 'ALL' ? undefined : activeFilter;
+      const [data, allData] = await Promise.all([
+        api.getConversations(filterParam, searchQuery),
+        api.getConversations(undefined, ''),
+      ]);
       // Deduplicate conversations by ID
       const uniqueConvs = (data.conversations || []).filter((c, idx, arr) =>
         arr.findIndex((item) => item.id === c.id) === idx
       );
       setConversations(uniqueConvs);
+      setAllConversationsForStats(allData.conversations || []);
 
       // If no conversation is selected, select the first one if available
       if (!selectedConvId && uniqueConvs.length > 0) {
@@ -538,6 +553,95 @@ export const ChatDeskView: React.FC = () => {
     }
   };
 
+  // Follow-up Reminders Logic & Handlers
+  const remindersCount = useMemo(() => {
+    return allConversationsForStats.filter(c => Boolean(c.reminder_date) && c.reminder_status === 'PENDING').length;
+  }, [allConversationsForStats]);
+
+  const dueTodayReminders = useMemo(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    return allConversationsForStats.filter(c => {
+      if (!c.reminder_date || c.reminder_status !== 'PENDING') return false;
+      return c.reminder_date <= todayStr;
+    });
+  }, [allConversationsForStats]);
+
+  const handleOpenReminderModal = () => {
+    if (!selectedConv) return;
+    if (selectedConv.reminder_date) {
+      setReminderDate(selectedConv.reminder_date);
+      setReminderNote(selectedConv.reminder_note || '');
+    } else {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      setReminderDate(tomorrow.toISOString().split('T')[0]);
+      setReminderNote('');
+    }
+    setReminderModalOpen(true);
+  };
+
+  const handleSaveReminder = async () => {
+    if (!selectedConvId || !reminderDate) return;
+    try {
+      setIsSavingReminder(true);
+      const noteToSave = reminderNote.trim() || 'Retornar contato';
+      await api.setConversationReminder(selectedConvId, reminderDate, noteToSave);
+      setReminderModalOpen(false);
+      const parts = reminderDate.split('-');
+      const formattedDate = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : reminderDate;
+      setSuccessMessage(`Lembrete de retorno agendado para ${formattedDate}!`);
+      setTimeout(() => setSuccessMessage(null), 4000);
+      await fetchConversationDetails(selectedConvId);
+      await fetchConversations();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Erro ao salvar agendamento de retorno.');
+    } finally {
+      setIsSavingReminder(false);
+    }
+  };
+
+  const handleCompleteReminder = async (convId?: string) => {
+    const id = convId || selectedConvId;
+    if (!id) return;
+    try {
+      await api.completeConversationReminder(id);
+      setSuccessMessage('Lembrete de retorno concluído com sucesso!');
+      setTimeout(() => setSuccessMessage(null), 3000);
+      await fetchConversationDetails(id);
+      await fetchConversations();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Erro ao concluir lembrete.');
+    }
+  };
+
+  const handleRemoveReminder = async () => {
+    if (!selectedConvId) return;
+    try {
+      setIsSavingReminder(true);
+      await api.removeConversationReminder(selectedConvId);
+      setReminderModalOpen(false);
+      setSuccessMessage('Lembrete de retorno removido.');
+      setTimeout(() => setSuccessMessage(null), 3000);
+      await fetchConversationDetails(selectedConvId);
+      await fetchConversations();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Erro ao remover lembrete.');
+    } finally {
+      setIsSavingReminder(false);
+    }
+  };
+
+  const handlePrepareFollowupMessage = () => {
+    if (!selectedConv) return;
+    const custFirstName = selectedConv.customer?.name ? selectedConv.customer.name.split(' ')[0] : 'tudo bem';
+    const dest = selectedConv.customer?.destination_interest ? ` para ${selectedConv.customer.destination_interest.split(',')[0]}` : '';
+    const text = `Olá, ${custFirstName}! Tudo bem? Passando para saber como ficou sobre seu pacote de viagem${dest}, já que combinamos de nos falar por volta de hoje! Como estão seus planos? ✈️`;
+    setInputText(text);
+    if (chatInputRef.current) {
+      chatInputRef.current.focus();
+    }
+  };
+
   // Trigger auto extraction manually on demand
   const handleTriggerAutoExtraction = async () => {
     if (!selectedConv?.customer?.id || messages.length === 0) return;
@@ -715,8 +819,50 @@ export const ChatDeskView: React.FC = () => {
             >
               Encerradas
             </button>
+            <button
+              onClick={() => setActiveFilter('REMINDERS')}
+              className={`px-2.5 py-1 rounded-md font-semibold text-xs shrink-0 transition-colors flex items-center gap-1.5 ${
+                activeFilter === 'REMINDERS'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
+              }`}
+            >
+              <Clock className="w-3 h-3 text-amber-600" />
+              Retornos
+              {remindersCount > 0 && (
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                    activeFilter === 'REMINDERS' ? 'bg-amber-900 text-white' : 'bg-amber-200 text-amber-900'
+                  }`}
+                >
+                  {remindersCount}
+                </span>
+              )}
+            </button>
           </div>
         </div>
+
+        {/* Due Today Reminders Alert Banner */}
+        {dueTodayReminders.length > 0 && (
+          <div className="px-3 py-2 bg-gradient-to-r from-amber-500 to-amber-600 text-white text-xs font-semibold flex items-center justify-between shadow-xs border-b border-amber-600">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+              <span>
+                {dueTodayReminders.length} retorno{dueTodayReminders.length > 1 ? 's' : ''} para hoje!
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveFilter('REMINDERS');
+                if (dueTodayReminders[0]) setSelectedConvId(dueTodayReminders[0].id);
+              }}
+              className="text-[10px] bg-white text-amber-950 px-2 py-0.5 rounded-md font-bold hover:bg-amber-50 cursor-pointer transition-colors shadow-2xs"
+            >
+              Ver Agora
+            </button>
+          </div>
+        )}
 
         {/* Conversation List */}
         <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
@@ -816,12 +962,33 @@ export const ChatDeskView: React.FC = () => {
                         <span className="text-slate-400">Sem atendente</span>
                       )}
 
-                      {/* Destination Pill */}
-                      {c.customer?.destination_interest && (
-                        <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full font-semibold truncate max-w-[120px]">
-                          {c.customer.destination_interest.split(',')[0]}
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                        {/* Destination Pill */}
+                        {c.customer?.destination_interest && (
+                          <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full font-semibold truncate max-w-[110px]">
+                            {c.customer.destination_interest.split(',')[0]}
+                          </span>
+                        )}
+
+                        {/* Reminder Pill */}
+                        {c.reminder_date && c.reminder_status === 'PENDING' && (
+                          <span
+                            className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold flex items-center gap-1 shrink-0 ${
+                              c.reminder_date <= new Date().toISOString().split('T')[0]
+                                ? 'bg-amber-100 text-amber-950 border border-amber-300 font-extrabold animate-pulse'
+                                : 'bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}
+                            title={`Retorno agendado: ${c.reminder_note || ''}`}
+                          >
+                            <Clock className="w-2.5 h-2.5 text-amber-600" />
+                            {c.reminder_date === new Date().toISOString().split('T')[0]
+                              ? 'Retornar Hoje'
+                              : c.reminder_date < new Date().toISOString().split('T')[0]
+                              ? 'Atrasado'
+                              : `${c.reminder_date.split('-')[2]}/${c.reminder_date.split('-')[1]}`}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -880,9 +1047,45 @@ export const ChatDeskView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Action Buttons: Atender, Transferir, Encerrar */}
-              <div className="flex items-center gap-2 shrink-0">
-                {selectedConv.status === 'WAITING' && (
+                {/* Action Buttons: Atender, Retorno, Transferir, Encerrar */}
+                <div className="flex items-center gap-2 shrink-0">
+                  {selectedConv.status !== 'CLOSED' && (
+                    <button
+                      type="button"
+                      onClick={handleOpenReminderModal}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer ${
+                        selectedConv.reminder_date && selectedConv.reminder_status === 'PENDING'
+                          ? selectedConv.reminder_date <= new Date().toISOString().split('T')[0]
+                            ? 'bg-amber-500 hover:bg-amber-600 text-white animate-pulse'
+                            : 'bg-amber-50 border border-amber-300 text-amber-900 hover:bg-amber-100'
+                          : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+                      }`}
+                      title={
+                        selectedConv.reminder_date && selectedConv.reminder_status === 'PENDING'
+                          ? `Retorno: ${selectedConv.reminder_date} - ${selectedConv.reminder_note || ''}`
+                          : 'Agendar data de retorno / follow-up'
+                      }
+                    >
+                      <Clock
+                        className={`w-3.5 h-3.5 ${
+                          selectedConv.reminder_date &&
+                          selectedConv.reminder_status === 'PENDING' &&
+                          selectedConv.reminder_date <= new Date().toISOString().split('T')[0]
+                            ? 'text-white'
+                            : 'text-amber-600'
+                        }`}
+                      />
+                      <span className="hidden sm:inline">
+                        {selectedConv.reminder_date && selectedConv.reminder_status === 'PENDING'
+                          ? selectedConv.reminder_date === new Date().toISOString().split('T')[0]
+                            ? 'Retornar Hoje!'
+                            : `Retorno ${selectedConv.reminder_date.split('-')[2]}/${selectedConv.reminder_date.split('-')[1]}`
+                          : 'Agendar Retorno'}
+                      </span>
+                    </button>
+                  )}
+
+                  {selectedConv.status === 'WAITING' && (
                   <button
                     onClick={handleAssign}
                     disabled={isAssigning}
@@ -926,6 +1129,77 @@ export const ChatDeskView: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {/* Reminder Alert Banner for this Customer */}
+            {selectedConv.reminder_date && selectedConv.reminder_status === 'PENDING' && (
+              <div
+                className={`px-4 py-2.5 border-b flex items-center justify-between gap-3 text-xs ${
+                  selectedConv.reminder_date <= new Date().toISOString().split('T')[0]
+                    ? 'bg-amber-50/90 border-amber-300 text-amber-950'
+                    : 'bg-blue-50/80 border-blue-200 text-blue-950'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                      selectedConv.reminder_date <= new Date().toISOString().split('T')[0]
+                        ? 'bg-amber-200 text-amber-900'
+                        : 'bg-blue-100 text-blue-700'
+                    }`}
+                  >
+                    {selectedConv.reminder_date <= new Date().toISOString().split('T')[0] ? (
+                      <BellRing className="w-4 h-4 animate-bounce" />
+                    ) : (
+                      <Calendar className="w-4 h-4" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-bold flex items-center gap-1.5 truncate">
+                      <span>
+                        {selectedConv.reminder_date === new Date().toISOString().split('T')[0]
+                          ? '⏰ Lembrete de Retorno: VENCE HOJE!'
+                          : selectedConv.reminder_date < new Date().toISOString().split('T')[0]
+                          ? '⚠️ Lembrete de Retorno: ATRASADO!'
+                          : `📅 Retorno Agendado para ${selectedConv.reminder_date.split('-')[2]}/${selectedConv.reminder_date.split('-')[1]}/${selectedConv.reminder_date.split('-')[0]}`}
+                      </span>
+                    </p>
+                    <p className="text-[11px] opacity-80 truncate">
+                      Motivo: "{selectedConv.reminder_note || 'Retornar contato'}"
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {selectedConv.status !== 'CLOSED' && (
+                    <button
+                      type="button"
+                      onClick={handlePrepareFollowupMessage}
+                      className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs flex items-center gap-1 shadow-2xs cursor-pointer transition-colors"
+                      title="Preenche a mensagem com texto pronto de follow-up"
+                    >
+                      <MessageSquare className="w-3 h-3" />
+                      <span>Chamar</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleCompleteReminder(selectedConv.id)}
+                    className="px-2.5 py-1 bg-white hover:bg-emerald-50 border border-emerald-300 text-emerald-700 font-bold rounded-lg text-xs flex items-center gap-1 shadow-2xs cursor-pointer transition-colors"
+                    title="Marcar como concluído"
+                  >
+                    <Check className="w-3 h-3" />
+                    <span className="hidden sm:inline">Concluir</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleOpenReminderModal}
+                    className="px-2 py-1 text-slate-500 hover:text-slate-800 text-xs font-semibold cursor-pointer"
+                  >
+                    Editar
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Error banner if any */}
             {errorMessage && (
@@ -1086,6 +1360,13 @@ export const ChatDeskView: React.FC = () => {
                     </span>
                     <button
                       type="button"
+                      onClick={handlePrepareFollowupMessage}
+                      className="px-2.5 py-1 rounded-full bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[11px] font-semibold shrink-0 transition-colors flex items-center gap-1"
+                    >
+                      ⏰ Retorno de Contato
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setInputText('Olá! Tudo bem? Sou atendente da agência de viagens. Como posso te ajudar com seu roteiro hoje?')}
                       className="px-2.5 py-1 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium shrink-0 transition-colors"
                     >
@@ -1118,6 +1399,7 @@ export const ChatDeskView: React.FC = () => {
                 <form onSubmit={handleSendMessage} className="space-y-1.5">
                   <div className="flex items-center gap-2.5">
                     <input
+                      ref={chatInputRef}
                       type="text"
                       disabled={!canReply || isSending}
                       placeholder={
@@ -1334,6 +1616,110 @@ export const ChatDeskView: React.FC = () => {
                   </p>
                 </div>
               </div>
+            )}
+          </div>
+
+          {/* Follow-up Reminder / Agendamento de Retorno */}
+          <div className="pt-3 border-t border-slate-100">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[10px] text-slate-400 font-bold uppercase flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-amber-600" />
+                Agendamento de Retorno
+              </p>
+              {selectedConv.reminder_date && selectedConv.reminder_status === 'PENDING' && (
+                <button
+                  type="button"
+                  onClick={handleOpenReminderModal}
+                  className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold cursor-pointer"
+                >
+                  Alterar
+                </button>
+              )}
+            </div>
+
+            {selectedConv.reminder_date && selectedConv.reminder_status === 'PENDING' ? (
+              <div
+                className={`p-3 rounded-xl border text-xs space-y-2.5 ${
+                  selectedConv.reminder_date <= new Date().toISOString().split('T')[0]
+                    ? 'bg-amber-50/90 border-amber-300 shadow-2xs'
+                    : 'bg-slate-50 border-slate-200'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                      selectedConv.reminder_date === new Date().toISOString().split('T')[0]
+                        ? 'bg-amber-200 text-amber-950 animate-pulse'
+                        : selectedConv.reminder_date < new Date().toISOString().split('T')[0]
+                        ? 'bg-rose-100 text-rose-800'
+                        : 'bg-blue-100 text-blue-800'
+                    }`}
+                  >
+                    {selectedConv.reminder_date === new Date().toISOString().split('T')[0]
+                      ? '🔔 Retornar Hoje!'
+                      : selectedConv.reminder_date < new Date().toISOString().split('T')[0]
+                      ? '⚠️ Retorno Atrasado'
+                      : `📅 ${selectedConv.reminder_date.split('-')[2]}/${selectedConv.reminder_date.split('-')[1]}/${selectedConv.reminder_date.split('-')[0]}`}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-medium">Status: Pendente</span>
+                </div>
+
+                <div className="bg-white/80 p-2 rounded-lg border border-slate-200/60">
+                  <p className="text-[10px] text-slate-400 font-bold uppercase mb-0.5">Motivo / Anotação:</p>
+                  <p className="text-slate-700 font-medium leading-relaxed text-xs">
+                    "{selectedConv.reminder_note || 'Retornar contato com o cliente'}"
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => handleCompleteReminder(selectedConv.id)}
+                    className="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1 shadow-2xs cursor-pointer transition-colors"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Concluir</span>
+                  </button>
+                  {selectedConv.status !== 'CLOSED' && (
+                    <button
+                      type="button"
+                      onClick={handlePrepareFollowupMessage}
+                      className="flex-1 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1 shadow-2xs cursor-pointer transition-colors"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>Chamar</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : selectedConv.reminder_status === 'COMPLETED' ? (
+              <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl text-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    Retorno Realizado
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleOpenReminderModal}
+                    className="text-[11px] text-emerald-700 hover:underline font-semibold cursor-pointer"
+                  >
+                    Novo Retorno
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-600 italic">
+                  Último retorno marcado como concluído com sucesso.
+                </p>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleOpenReminderModal}
+                className="w-full py-2.5 px-3 bg-amber-50 hover:bg-amber-100 border border-dashed border-amber-300 text-amber-900 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-2xs"
+              >
+                <Clock className="w-3.5 h-3.5 text-amber-700" />
+                <span>Agendar Data de Retorno</span>
+              </button>
             )}
           </div>
 
@@ -1647,6 +2033,114 @@ export const ChatDeskView: React.FC = () => {
               <span>
                 Essa simulação aciona o mesmo fluxo do webhook do WhatsApp oficial: roteamento inteligente, extração de parâmetros de viagem com IA e notificações em tempo real.
               </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE AGENDAMENTO DE RETORNO */}
+      {reminderModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-amber-50 to-amber-100/50">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                  <Clock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm">
+                    Agendar Retorno
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {selectedConv?.customer?.name || 'Cliente'} ({formatPhoneNumber(selectedConv?.customer?.phone)})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReminderModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-white/60 transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Seletor Direto de Data */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-800">
+                  Qual dia você quer ser notificado para dar retorno? <span className="text-amber-600">*</span>
+                </label>
+                <input
+                  type="date"
+                  min={new Date().toISOString().split('T')[0]}
+                  value={reminderDate}
+                  onChange={(e) => setReminderDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                <p className="text-[11px] text-slate-500">
+                  Selecione a data exata em que você quer entrar em contato novamente com o cliente.
+                </p>
+              </div>
+
+              {/* Motivo Opcional */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-800">
+                  Motivo do retorno (opcional):
+                </label>
+                <input
+                  type="text"
+                  value={reminderNote}
+                  onChange={(e) => setReminderNote(e.target.value)}
+                  placeholder="Ex: Verificar se já decidiu o destino ou aprovou a cotação..."
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              {/* Informational banner */}
+              <div className="text-[11px] text-amber-900 bg-amber-50/80 p-3 rounded-xl border border-amber-200/80 flex items-start gap-2">
+                <BellRing className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  No dia selecionado ({reminderDate ? `${reminderDate.split('-')[2]}/${reminderDate.split('-')[1]}/${reminderDate.split('-')[0]}` : 'escolhido'}), o sistema notificará você na aba <strong>Retornos</strong> e no topo da conversa para você chamar o cliente.
+                </span>
+              </div>
+            </div>
+
+            {/* Modal Actions Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-2">
+              <div>
+                {selectedConv?.reminder_date && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveReminder}
+                    disabled={isSavingReminder}
+                    className="text-xs text-rose-600 hover:text-rose-800 font-semibold px-2 py-1.5 flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Remover Lembrete</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReminderModalOpen(false)}
+                  disabled={isSavingReminder}
+                  className="px-4 py-2 bg-white border border-slate-200 text-slate-700 font-semibold text-xs rounded-xl hover:bg-slate-100 cursor-pointer transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveReminder}
+                  disabled={!reminderDate || isSavingReminder}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>{isSavingReminder ? 'Salvando...' : 'Salvar Agendamento'}</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -207,6 +207,9 @@ export const DEMO_CONVERSATIONS: Conversation[] = [
     last_message_at: new Date().toISOString(),
     auto_requeued_inactivity: false,
     customer: DEMO_CUSTOMERS[0],
+    reminder_date: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
+    reminder_note: 'Retornar após conversa com a esposa sobre as datas',
+    reminder_status: 'PENDING',
     last_message: {
       id: 'msg_matheus_last',
       organization_id: 'org_realizzetravel',
@@ -284,6 +287,9 @@ export const DEMO_CONVERSATIONS: Conversation[] = [
     last_message_at: new Date(Date.now() - 7200 * 1000).toISOString(),
     auto_requeued_inactivity: false,
     customer: DEMO_CUSTOMERS[3],
+    reminder_date: new Date().toISOString().split('T')[0], // Today
+    reminder_note: 'Cartão vai virar hoje (dia 20) - Ligar para fechar pacote Bariloche',
+    reminder_status: 'PENDING',
     last_message: {
       id: 'msg_juliana_last',
       organization_id: 'org_realizzetravel',

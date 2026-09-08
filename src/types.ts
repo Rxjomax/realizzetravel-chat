@@ -55,6 +55,10 @@ export interface Conversation {
   sale_value?: number | null;
   lost_reason?: string | null;
   auto_requeued_inactivity?: boolean;
+  // Follow-up Reminder / Agendamento de Retorno
+  reminder_date?: string | null;
+  reminder_note?: string | null;
+  reminder_status?: 'PENDING' | 'COMPLETED' | 'DISMISSED' | null;
   // Joined relation fields for UI
   customer?: Customer;
   assigned_user?: User | null;
@@ -104,7 +108,7 @@ export interface ConversationEvent {
   id: string;
   conversation_id: string;
   user_id?: string | null;
-  event_type: 'CREATED' | 'ASSIGNED' | 'TRANSFERRED' | 'CLOSED' | 'REOPENED' | 'NOTE_ADDED';
+  event_type: 'CREATED' | 'ASSIGNED' | 'TRANSFERRED' | 'CLOSED' | 'REOPENED' | 'NOTE_ADDED' | 'REMINDER_SET' | 'REMINDER_COMPLETED';
   metadata?: string | null;
   created_at: string;
   user?: User;

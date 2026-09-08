@@ -411,6 +411,8 @@ class ApiService {
       list = list.filter(c => c.status === 'OPEN' || c.status === 'ASSIGNED');
     } else if (normFilter === 'closed' || normFilter === 'encerradas' || normFilter === 'finalizadas') {
       list = list.filter(c => c.status === 'CLOSED');
+    } else if (normFilter === 'reminders' || normFilter === 'retornos' || normFilter === 'lembretes') {
+      list = list.filter(c => Boolean(c.reminder_date) && c.reminder_status === 'PENDING');
     }
 
     if (search) {
@@ -804,6 +806,71 @@ class ApiService {
       });
     } catch {
       return { success: true, message: 'Conversa finalizada com sucesso!' };
+    }
+  }
+
+  // Follow-up Reminder Endpoints
+  public async setConversationReminder(
+    conversationId: string,
+    reminderDate: string,
+    reminderNote?: string
+  ): Promise<{ success: boolean; message: string }> {
+    this.loadLocalStorageState();
+    const conv = this.localConversations.find(c => c.id === conversationId);
+    if (conv) {
+      conv.reminder_date = reminderDate;
+      conv.reminder_note = reminderNote || 'Aguardando retorno do cliente';
+      conv.reminder_status = 'PENDING';
+      this.saveLocalStorageState();
+    }
+
+    try {
+      return await this.request<{ success: boolean; message: string }>(`/conversations/${conversationId}/reminder`, {
+        method: 'POST',
+        body: JSON.stringify({ reminderDate, reminderNote }),
+      });
+    } catch {
+      return { success: true, message: 'Lembrete de retorno agendado com sucesso!' };
+    }
+  }
+
+  public async completeConversationReminder(
+    conversationId: string
+  ): Promise<{ success: boolean; message: string }> {
+    this.loadLocalStorageState();
+    const conv = this.localConversations.find(c => c.id === conversationId);
+    if (conv) {
+      conv.reminder_status = 'COMPLETED';
+      this.saveLocalStorageState();
+    }
+
+    try {
+      return await this.request<{ success: boolean; message: string }>(`/conversations/${conversationId}/reminder/complete`, {
+        method: 'PATCH',
+      });
+    } catch {
+      return { success: true, message: 'Lembrete de retorno marcado como concluído!' };
+    }
+  }
+
+  public async removeConversationReminder(
+    conversationId: string
+  ): Promise<{ success: boolean; message: string }> {
+    this.loadLocalStorageState();
+    const conv = this.localConversations.find(c => c.id === conversationId);
+    if (conv) {
+      conv.reminder_date = null;
+      conv.reminder_note = null;
+      conv.reminder_status = null;
+      this.saveLocalStorageState();
+    }
+
+    try {
+      return await this.request<{ success: boolean; message: string }>(`/conversations/${conversationId}/reminder`, {
+        method: 'DELETE',
+      });
+    } catch {
+      return { success: true, message: 'Lembrete de retorno removido com sucesso.' };
     }
   }
 

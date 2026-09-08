@@ -59,6 +59,15 @@ export async function getDatabase(): Promise<SqlJsDatabase> {
     try {
       dbInstance.run('ALTER TABLE customers ADD COLUMN avatar TEXT;');
     } catch {}
+    try {
+      dbInstance.run('ALTER TABLE conversations ADD COLUMN reminder_date TEXT;');
+    } catch {}
+    try {
+      dbInstance.run('ALTER TABLE conversations ADD COLUMN reminder_note TEXT;');
+    } catch {}
+    try {
+      dbInstance.run("ALTER TABLE conversations ADD COLUMN reminder_status TEXT DEFAULT 'PENDING';");
+    } catch {}
     saveDatabase();
   }
 
