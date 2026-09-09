@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../../services/api';
+import { socketClient } from '../../services/socket';
 import { useAuth } from '../../context/AuthContext';
 import { WhatsAppGroup, WhatsAppGroupMessage } from '../../types';
 import {
@@ -15,6 +16,8 @@ import {
   CheckCheck,
   Tag,
   Share2,
+  RefreshCw,
+  Check,
 } from 'lucide-react';
 
 export const WhatsAppGroupsView: React.FC = () => {
@@ -25,26 +28,106 @@ export const WhatsAppGroupsView: React.FC = () => {
   const [newMessage, setNewMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
 
+  const selectedGroupIdRef = useRef<string | null>(null);
   useEffect(() => {
-    loadGroups();
-  }, []);
+    selectedGroupIdRef.current = selectedGroup?.id || null;
+  }, [selectedGroup]);
 
-  const loadGroups = async () => {
-    setIsLoading(true);
+  const loadGroups = useCallback(async (silent = false) => {
+    if (!silent) setIsLoading(true);
     try {
       const res = await api.getWhatsAppGroups();
       setGroups(res.groups);
-      if (res.groups.length > 0 && !selectedGroup) {
-        setSelectedGroup(res.groups[0]);
-      } else if (selectedGroup) {
-        const updated = res.groups.find(g => g.id === selectedGroup.id);
-        if (updated) setSelectedGroup(updated);
+      if (res.groups.length > 0) {
+        if (!selectedGroupIdRef.current) {
+          setSelectedGroup(res.groups[0]);
+        } else {
+          const updated = res.groups.find(g => g.id === selectedGroupIdRef.current);
+          if (updated) setSelectedGroup(updated);
+        }
       }
     } catch (err) {
       console.error('Error loading WhatsApp groups:', err);
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadGroups();
+  }, [loadGroups]);
+
+  // Periodic background refresh (resilience)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      loadGroups(true);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [loadGroups]);
+
+  // Real-time WebSocket listeners
+  useEffect(() => {
+    const unbindGroupMsg = socketClient.on('group:message', (payload: { groupId: string; message: any }) => {
+      if (!payload || !payload.groupId) return;
+
+      setGroups(prev => {
+        return prev.map(g => {
+          if (g.id === payload.groupId) {
+            const currentMsgs = g.messages || [];
+            const exists = currentMsgs.some(m => m.id === payload.message?.id);
+            const nextMsgs = exists ? currentMsgs : [...currentMsgs, payload.message];
+            return {
+              ...g,
+              last_message: payload.message?.content || g.last_message,
+              last_message_at: payload.message?.created_at || new Date().toISOString(),
+              messages: nextMsgs,
+            };
+          }
+          return g;
+        });
+      });
+
+      if (selectedGroupIdRef.current === payload.groupId) {
+        setSelectedGroup(prev => {
+          if (!prev || prev.id !== payload.groupId) return prev;
+          const currentMsgs = prev.messages || [];
+          if (currentMsgs.some(m => m.id === payload.message?.id)) return prev;
+          return {
+            ...prev,
+            last_message: payload.message?.content || prev.last_message,
+            last_message_at: payload.message?.created_at || new Date().toISOString(),
+            messages: [...currentMsgs, payload.message],
+          };
+        });
+      }
+    });
+
+    const unbindGroupsUpdated = socketClient.on('groups:updated', () => {
+      loadGroups(true);
+    });
+
+    return () => {
+      unbindGroupMsg();
+      unbindGroupsUpdated();
+    };
+  }, [loadGroups]);
+
+  const handleSyncGroups = async () => {
+    setIsSyncing(true);
+    setSyncFeedback(null);
+    try {
+      const res = await api.syncWhatsAppGroups();
+      await loadGroups(true);
+      setSyncFeedback(res.message || 'Grupos sincronizados com sucesso!');
+      setTimeout(() => setSyncFeedback(null), 4000);
+    } catch {
+      setSyncFeedback('Erro ao sincronizar grupos.');
+      setTimeout(() => setSyncFeedback(null), 4000);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -63,7 +146,7 @@ export const WhatsAppGroupsView: React.FC = () => {
 
     try {
       await api.sendWhatsAppGroupMessage(selectedGroup.id, content);
-      await loadGroups();
+      await loadGroups(true);
     } catch (err) {
       console.error('Error sending group message:', err);
     } finally {
@@ -74,7 +157,7 @@ export const WhatsAppGroupsView: React.FC = () => {
   return (
     <div className="flex-1 flex flex-col h-[calc(100vh-4rem)] overflow-hidden bg-slate-100">
       {/* Top Banner indicating access to main agency number */}
-      <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-cyan-800 text-white px-6 py-3 shrink-0 flex flex-wrap items-center justify-between shadow-md">
+      <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-cyan-800 text-white px-6 py-3 shrink-0 flex flex-wrap items-center justify-between gap-3 shadow-md">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center backdrop-blur-sm border border-white/20">
             <MessageCircle className="w-5 h-5 text-emerald-300" />
@@ -95,9 +178,28 @@ export const WhatsAppGroupsView: React.FC = () => {
           </div>
         </div>
 
-        <div className="text-xs bg-black/20 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2">
-          <Shield className="w-3.5 h-3.5 text-emerald-300" />
-          <span>Atuando como: <strong>{user?.name}</strong></span>
+        <div className="flex items-center gap-2">
+          {syncFeedback && (
+            <span className="text-xs bg-emerald-500/30 border border-emerald-400/40 text-emerald-100 px-3 py-1 rounded-lg flex items-center gap-1.5 animate-fade-in">
+              <Check className="w-3.5 h-3.5 text-emerald-300" />
+              {syncFeedback}
+            </span>
+          )}
+
+          <button
+            onClick={handleSyncGroups}
+            disabled={isSyncing}
+            className="px-3 py-1.5 bg-white/10 hover:bg-white/20 active:scale-95 disabled:opacity-50 text-xs text-emerald-50 font-medium rounded-lg border border-white/15 transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+            title="Buscar grupos atualizados do WhatsApp conectado"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-300 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar Grupos'}</span>
+          </button>
+
+          <div className="text-xs bg-black/20 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2">
+            <Shield className="w-3.5 h-3.5 text-emerald-300" />
+            <span>Atuando como: <strong>{user?.name}</strong></span>
+          </div>
         </div>
       </div>
 

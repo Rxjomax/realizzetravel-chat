@@ -24,16 +24,41 @@ export async function seedDatabase(): Promise<void> {
 
     const now = new Date().toISOString();
 
-    // Clean any initial dummy whatsapp config if it still had the hardcoded dummy phone
+    // Ensure WhatsApp configuration is pre-configured with the VPS Evolution API
     const currentWaRow = dbGet<{ value: string }>("SELECT value FROM settings WHERE key = 'whatsapp_config'");
-    if (currentWaRow && currentWaRow.value && currentWaRow.value.includes('+55 81 99535-7254')) {
+    if (currentWaRow && currentWaRow.value) {
       try {
         const parsed = JSON.parse(currentWaRow.value);
-        parsed.phoneConnected = null;
-        parsed.status = 'DISCONNECTED';
-        parsed.qrCodeBase64 = null;
-        dbRun("UPDATE settings SET value = ? WHERE key = 'whatsapp_config'", [JSON.stringify(parsed)]);
+        // Pre-configure Evolution API defaults so user can immediately scan QR code
+        if (!parsed.gatewayUrl || parsed.instanceName === 'realizze-travel' || parsed.providerType !== 'EVOLUTION_API') {
+          parsed.providerType = 'EVOLUTION_API';
+          parsed.gatewayUrl = process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080';
+          parsed.apiKey = process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026';
+          parsed.instanceName = process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial';
+          dbRun("UPDATE settings SET value = ? WHERE key = 'whatsapp_config'", [JSON.stringify(parsed)]);
+        }
       } catch {}
+    } else {
+      dbRun(
+        `INSERT INTO settings (id, organization_id, key, value, created_at, updated_at)
+         VALUES (?, ?, 'whatsapp_config', ?, ?, ?)`,
+        [
+          'set_wa_config',
+          'org_realizzetravel',
+          JSON.stringify({
+            providerType: 'EVOLUTION_API',
+            gatewayUrl: process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080',
+            apiKey: process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026',
+            instanceName: process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial',
+            status: 'DISCONNECTED',
+            qrCodeBase64: null,
+            phoneConnected: null,
+            batteryLevel: null,
+          }),
+          now,
+          now,
+        ]
+      );
     }
 
     // Seed users if not exist
@@ -198,16 +223,17 @@ export async function seedDatabase(): Promise<void> {
         orgId,
         'whatsapp_config',
         JSON.stringify({
-          providerType: 'QR_CODE',
+          providerType: 'EVOLUTION_API',
           phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
           businessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '',
           accessToken: process.env.WHATSAPP_ACCESS_TOKEN || '',
           verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || 'viagens_whatsapp_verify_token_2026',
-          instanceName: 'realizze-travel',
-          gatewayUrl: '',
-          apiKey: '',
+          instanceName: process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial',
+          gatewayUrl: process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080',
+          apiKey: process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026',
           qrCodeBase64: null,
           phoneConnected: null,
+          batteryLevel: null,
           status: 'DISCONNECTED',
         }),
         now,

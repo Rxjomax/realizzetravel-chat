@@ -68,6 +68,37 @@ export async function getDatabase(): Promise<SqlJsDatabase> {
     try {
       dbInstance.run("ALTER TABLE conversations ADD COLUMN reminder_status TEXT DEFAULT 'PENDING';");
     } catch {}
+    try {
+      dbInstance.run(`
+        CREATE TABLE IF NOT EXISTS whatsapp_groups (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT,
+          participant_count INTEGER DEFAULT 0,
+          avatar TEXT,
+          last_message TEXT,
+          last_message_at TEXT NOT NULL,
+          destination_focus TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+        );
+      `);
+      dbInstance.run(`
+        CREATE TABLE IF NOT EXISTS whatsapp_group_messages (
+          id TEXT PRIMARY KEY,
+          group_id TEXT NOT NULL,
+          sender_name TEXT NOT NULL,
+          sender_phone TEXT,
+          content TEXT NOT NULL,
+          is_from_agency INTEGER DEFAULT 0,
+          media_url TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (group_id) REFERENCES whatsapp_groups(id) ON DELETE CASCADE
+        );
+      `);
+    } catch {}
     saveDatabase();
   }
 

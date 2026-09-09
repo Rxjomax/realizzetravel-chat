@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Smartphone,
   Globe,
+  QrCode,
   CheckCircle2,
   ShieldCheck,
   Key,
@@ -30,6 +31,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { WhatsAppConfig, WhatsAppProviderType } from '../../types';
+import { EvolutionWhatsAppTab } from './EvolutionWhatsAppTab';
 
 export const AVATAR_PRESETS = [
   {
@@ -59,8 +61,8 @@ export const AVATAR_PRESETS = [
 ];
 
 export const WhatsAppConfigView: React.FC = () => {
-  // Provider Selection: Oficial Meta Cloud API
-  const [providerType, setProviderType] = useState<WhatsAppProviderType>('META_CLOUD');
+  // Provider Selection: Default to Evolution API (Pre-configured on VPS)
+  const [providerType, setProviderType] = useState<WhatsAppProviderType>('EVOLUTION_API');
 
   // Meta Cloud API State
   const [phoneNumberId, setPhoneNumberId] = useState('');
@@ -113,7 +115,7 @@ export const WhatsAppConfigView: React.FC = () => {
         const res = await api.getWhatsAppSettings();
         if (res.config) {
           const cfg = res.config;
-          setProviderType('META_CLOUD');
+          setProviderType(cfg.providerType === 'META_CLOUD' ? 'META_CLOUD' : 'EVOLUTION_API');
           setPhoneNumberId(cfg.phoneNumberId || '');
           setBusinessAccountId(cfg.businessAccountId || '');
           setAccessToken(cfg.accessToken || '');
@@ -338,20 +340,20 @@ export const WhatsAppConfigView: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-200/80 pb-6">
         <div>
           <div className="flex items-center gap-2.5">
-            <span className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-100 shadow-2xs">
-              <Globe className="w-5 h-5" />
+            <span className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shadow-2xs">
+              <Smartphone className="w-5 h-5" />
             </span>
             <div>
               <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-                <span>WhatsApp Oficial — Meta Cloud API</span>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200">
-                  Graph API v21.0
+                <span>WhatsApp da Agência</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  Realizze Travel
                 </span>
               </h2>
             </div>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Canal oficial direto em nuvem da Meta para a <strong>Realizze Travel</strong>. 100% compatível com a hospedagem na Vercel, sem necessidade de servidores locais ou VPS.
+            Conecte o número de WhatsApp da agência para envio e recebimento em tempo real na fila dos consultores.
           </p>
         </div>
 
@@ -360,7 +362,7 @@ export const WhatsAppConfigView: React.FC = () => {
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/80 shadow-2xs">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>Canal Meta Conectado</span>
+                <span>Canal Conectado</span>
                 {phoneConnected && (
                   <span className="text-[11px] font-mono text-emerald-800 bg-emerald-100/60 px-1.5 py-0.5 rounded">
                     {phoneConnected}
@@ -379,14 +381,54 @@ export const WhatsAppConfigView: React.FC = () => {
           ) : (
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 shadow-2xs">
               <span className="w-2 h-2 rounded-full bg-amber-500" />
-              Aguardando Configuração
+              Aguardando Leitura
             </span>
           )}
         </div>
       </div>
 
-      {/* WHY META CLOUD API IS THE BEST FOR VERCEL (Benefícios Claros) */}
-      <div className="bg-gradient-to-r from-blue-50/90 via-sky-50/70 to-indigo-50/60 border border-blue-200/80 rounded-2xl p-4 sm:p-5 flex items-start gap-3.5 shadow-2xs">
+      {/* Provider Selector Tabs */}
+      <div className="flex items-center p-1.5 bg-slate-100/90 rounded-2xl border border-slate-200/80 max-w-2xl">
+        <button
+          type="button"
+          onClick={() => setProviderType('EVOLUTION_API')}
+          className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+            providerType === 'EVOLUTION_API' || providerType === 'QR_CODE'
+              ? 'bg-white text-emerald-800 shadow-xs border border-emerald-200/80'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
+          }`}
+        >
+          <QrCode className="w-4 h-4 text-emerald-600" />
+          <span>Escanear QR Code (Evolution VPS)</span>
+          <span className="px-1.5 py-0.5 rounded-md text-[9px] font-extrabold uppercase bg-emerald-100 text-emerald-700">
+            Pré-Configurado
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setProviderType('META_CLOUD')}
+          className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+            providerType === 'META_CLOUD'
+              ? 'bg-white text-blue-800 shadow-xs border border-blue-200/80'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
+          }`}
+        >
+          <Globe className="w-4 h-4 text-blue-600" />
+          <span>Meta Cloud API (Oficial)</span>
+        </button>
+      </div>
+
+      {/* Dynamic Tab Body */}
+      {providerType === 'EVOLUTION_API' || providerType === 'QR_CODE' ? (
+        <EvolutionWhatsAppTab
+          onDisconnectClick={() => setIsDisconnectModalOpen(true)}
+          onClearHistoryClick={() => setIsClearModalOpen(true)}
+        />
+      ) : (
+        <div className="space-y-8 animate-fadeIn">
+          {/* WHY META CLOUD API IS THE BEST FOR VERCEL (Benefícios Claros) */}
+          <div className="bg-gradient-to-r from-blue-50/90 via-sky-50/70 to-indigo-50/60 border border-blue-200/80 rounded-2xl p-4 sm:p-5 flex items-start gap-3.5 shadow-2xs">
         <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-sm mt-0.5">
           <ShieldCheck className="w-5 h-5" />
         </div>
@@ -993,6 +1035,8 @@ export const WhatsAppConfigView: React.FC = () => {
           </div>
         )}
       </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* MODAL 1: CONECTAR / CADASTRAR NÚMERO MANUALMENTE                          */}

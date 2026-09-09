@@ -886,6 +886,16 @@ class ApiService {
     }
   }
 
+  public async syncWhatsAppGroups(): Promise<{ success: boolean; count: number; message: string }> {
+    try {
+      return await this.request<{ success: boolean; count: number; message: string }>('/whatsapp/groups/sync', {
+        method: 'POST',
+      });
+    } catch {
+      return { success: false, count: 0, message: 'Falha ao sincronizar grupos do WhatsApp.' };
+    }
+  }
+
   public async sendWhatsAppGroupMessage(
     groupId: string,
     content: string
@@ -1236,6 +1246,14 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify(params),
     });
+  }
+
+  public async getWhatsAppLiveStatus(): Promise<{ connected: boolean; status: string; phoneConnected?: string | null }> {
+    try {
+      return await this.request('/settings/whatsapp/status');
+    } catch {
+      return { connected: false, status: 'DISCONNECTED' };
+    }
   }
 
   public async configureEvolutionWebhook(params: {

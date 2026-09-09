@@ -7,6 +7,7 @@ import { conversationsRouter } from './routes/conversations.routes';
 import { customersRouter } from './routes/customers.routes';
 import { webhookRouter } from './routes/webhook.routes';
 import { settingsRouter } from './routes/settings.routes';
+import { groupsRouter } from './routes/groups.routes';
 
 let dbInitialized = false;
 let initPromise: Promise<void> | null = null;
@@ -72,6 +73,7 @@ export function createExpressApp(): express.Express {
   app.use(['/api/conversations', '/conversations'], conversationsRouter);
   app.use(['/api/customers', '/customers'], customersRouter);
   app.use(['/api/settings', '/settings'], settingsRouter);
+  app.use(['/api/whatsapp/groups', '/whatsapp/groups', '/api/groups', '/groups'], groupsRouter);
   app.use(['/api', '/'], webhookRouter);
 
   // Global error handler

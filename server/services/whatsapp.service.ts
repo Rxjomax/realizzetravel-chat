@@ -110,23 +110,23 @@ export class WhatsAppService {
       try {
         const parsed = JSON.parse(settingRow.value);
         return {
-          providerType: parsed.providerType || 'META_CLOUD',
+          providerType: parsed.providerType || 'EVOLUTION_API',
           phoneNumberId: parsed.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || '',
           businessAccountId: parsed.businessAccountId || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '',
           accessToken: parsed.accessToken || process.env.WHATSAPP_ACCESS_TOKEN || '',
           verifyToken: parsed.verifyToken || process.env.WHATSAPP_VERIFY_TOKEN || 'viagens_whatsapp_verify_token_2026',
           verifiedName: parsed.verifiedName || null,
           qualityRating: parsed.qualityRating || null,
-          instanceName: parsed.instanceName || 'realizze-travel',
-          gatewayUrl: parsed.gatewayUrl || '',
-          apiKey: parsed.apiKey || '',
+          instanceName: parsed.instanceName || process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial',
+          gatewayUrl: parsed.gatewayUrl || process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080',
+          apiKey: parsed.apiKey || process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026',
           zapiInstanceId: parsed.zapiInstanceId || '',
           zapiToken: parsed.zapiToken || '',
           zapiClientToken: parsed.zapiClientToken || '',
           qrCodeBase64: parsed.qrCodeBase64 || null,
           phoneConnected: parsed.phoneConnected || null,
           batteryLevel: parsed.batteryLevel !== undefined ? parsed.batteryLevel : null,
-          status: parsed.status || 'CONNECTED',
+          status: parsed.status || 'DISCONNECTED',
         };
       } catch (e) {
         console.error('Error parsing whatsapp_config JSON:', e);
@@ -134,23 +134,23 @@ export class WhatsAppService {
     }
 
     return {
-      providerType: 'META_CLOUD',
+      providerType: 'EVOLUTION_API',
       phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
       businessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '',
       accessToken: process.env.WHATSAPP_ACCESS_TOKEN || '',
       verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || 'viagens_whatsapp_verify_token_2026',
       verifiedName: null,
       qualityRating: null,
-      instanceName: 'realizze-travel',
-      gatewayUrl: '',
-      apiKey: '',
+      instanceName: process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial',
+      gatewayUrl: process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080',
+      apiKey: process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026',
       zapiInstanceId: '',
       zapiToken: '',
       zapiClientToken: '',
       qrCodeBase64: null,
       phoneConnected: null,
       batteryLevel: null,
-      status: 'CONNECTED',
+      status: 'DISCONNECTED',
     };
   }
 
@@ -341,16 +341,21 @@ export class WhatsAppService {
     const event = body.event || body.type || '';
     const data = body.data || body;
 
-    // Z-API connection status: { connected: true, phone: '5511999998888' } or status update
-    if (body.connected !== undefined || body.status === 'CONNECTED' || body.state === 'open' || event === 'connection.update') {
-      const isConnected = body.connected === true || body.status === 'CONNECTED' || body.state === 'open';
+    // Z-API / Evolution API connection status: { connected: true, phone: '5511999998888' } or status update
+    if (body.connected !== undefined || body.status === 'CONNECTED' || body.state === 'open' || event === 'connection.update' || event === 'CONNECTION_UPDATE') {
+      const isConnected = body.connected === true || body.status === 'CONNECTED' || body.state === 'open' || data?.state === 'open';
       const phone = body.phone || data?.phone || data?.user;
       this.updateGatewayConnectionStatus(targetOrg, isConnected ? 'CONNECTED' : 'DISCONNECTED', phone);
+      if (isConnected) {
+        // Automatically sync chats, groups and history upon connection!
+        this.syncEvolutionChats(targetOrg).catch(console.warn);
+        this.syncEvolutionGroups(targetOrg).catch(console.warn);
+      }
       return;
     }
 
     // Check for QR code state update
-    if (event === 'qrcode.updated' || body.qrcode || body.qrCode) {
+    if (event === 'qrcode.updated' || event === 'QRCODE_UPDATED' || body.qrcode || body.qrCode) {
       const qrCode = data.qrcode?.base64 || data.qrcode?.code || body.qrcode?.base64 || body.qrcode || body.qrCode;
       if (qrCode) {
         this.updateGatewayQrCode(targetOrg, qrCode);
@@ -383,9 +388,41 @@ export class WhatsAppService {
     }
 
     // Z-API specific on-message payload & general webhook message payloads
-    const rawPhone = body.phone || body.senderPhone || body.from || body.chatId || data?.phone || data?.from || data?.remoteJid;
+    const rawPhone = body.phone || body.senderPhone || body.from || body.chatId || data?.phone || data?.from || data?.remoteJid || data?.key?.remoteJid;
     const isFromMe = body.fromMe === true || body.isMyMessage === true || data?.key?.fromMe === true;
     const isGroupMsg = body.isGroup === true || String(rawPhone || '').includes('-') || String(rawPhone || '').endsWith('@g.us');
+
+    // Handle group messages (Z-API or Evolution API)
+    if (isGroupMsg) {
+      const groupId = String(rawPhone || data?.key?.remoteJid || body.chatId || '');
+      const pushName = body.senderName || body.pushName || data?.pushName || 'Participante do Grupo';
+      const senderPhone = body.participantPhone || (data?.key?.participant ? String(data.key.participant).replace(/\D/g, '') : undefined);
+      let groupMsgText = '';
+      if (typeof body.text === 'string' && body.text.trim()) groupMsgText = body.text.trim();
+      else if (body.text?.message) groupMsgText = body.text.message;
+      else if (typeof body.message === 'string') groupMsgText = body.message;
+      else if (body.message?.conversation) groupMsgText = body.message.conversation;
+      else if (body.message?.extendedTextMessage?.text) groupMsgText = body.message.extendedTextMessage.text;
+      else if (data?.message?.conversation) groupMsgText = data.message.conversation;
+      else if (data?.message?.extendedTextMessage?.text) groupMsgText = data.message.extendedTextMessage.text;
+      else if (data?.message?.imageMessage?.caption) groupMsgText = `[Foto] ${data.message.imageMessage.caption}`;
+      else if (data?.message?.imageMessage) groupMsgText = '[Foto]';
+      else if (data?.message?.audioMessage) groupMsgText = '[Áudio]';
+      else if (data?.message?.documentMessage) groupMsgText = '[Documento]';
+      else groupMsgText = 'Mensagem de grupo';
+
+      if (groupId && groupMsgText) {
+        this.processInboundGroupMessage({
+          organizationId: targetOrg,
+          groupId,
+          senderName: pushName,
+          senderPhone,
+          content: groupMsgText,
+          isFromAgency: isFromMe,
+        });
+      }
+      return;
+    }
 
     if (rawPhone && !isGroupMsg) {
       const cleanPhone = String(rawPhone).replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
@@ -410,34 +447,37 @@ export class WhatsAppService {
           msgText = body.message.conversation;
         } else if (body.message?.extendedTextMessage?.text) {
           msgText = body.message.extendedTextMessage.text;
+        } else if (data?.message?.conversation) {
+          msgText = data.message.conversation;
+        } else if (data?.message?.extendedTextMessage?.text) {
+          msgText = data.message.extendedTextMessage.text;
         } else if (body.body) {
           msgText = String(body.body);
         } else if (body.caption) {
           msgText = String(body.caption);
-        } else if (body.image) {
-          msgText = body.image.caption || '[Foto]';
-        } else if (body.document) {
-          msgText = body.document.fileName ? `[Documento: ${body.document.fileName}]` : '[Documento]';
-        } else if (body.audio) {
+        } else if (body.image || data?.message?.imageMessage) {
+          msgText = body.image?.caption || data?.message?.imageMessage?.caption || '[Foto]';
+        } else if (body.document || data?.message?.documentMessage) {
+          msgText = body.document?.fileName ? `[Documento: ${body.document.fileName}]` : '[Documento]';
+        } else if (body.audio || data?.message?.audioMessage) {
           msgText = '[Áudio]';
-        } else if (body.video) {
+        } else if (body.video || data?.message?.videoMessage) {
           msgText = '[Vídeo]';
         } else if (body.location) {
           msgText = '[Localização]';
         } else if (body.contact || body.contacts) {
           msgText = '[Contato compartilhado]';
         } else {
-          // No valid message content
-          return;
+          msgText = 'Mensagem recebida';
         }
 
         if (!msgText || !msgText.trim()) {
           return;
         }
 
-        const msgType = body.image ? 'image' : body.document ? 'document' : body.audio ? 'audio' : 'text';
+        const msgType = (body.image || data?.message?.imageMessage) ? 'image' : (body.document || data?.message?.documentMessage) ? 'document' : (body.audio || data?.message?.audioMessage) ? 'audio' : 'text';
         const mediaUrl = body.image?.imageUrl || body.document?.documentUrl || body.audio?.audioUrl || null;
-        const msgId = body.messageId || body.zaapId || body.id || `zapi_msg_${Date.now()}`;
+        const msgId = body.messageId || body.zaapId || body.id || data?.key?.id || `msg_${Date.now()}`;
 
         console.log(`💬 Processando mensagem ${isFromMe ? 'enviada (atendente)' : 'recebida (cliente)'} +${cleanPhone}: "${msgText}"`);
 
@@ -458,24 +498,44 @@ export class WhatsAppService {
     // Generic QR Code / Evolution API Inbound Message
     if (
       event === 'messages.upsert' ||
+      event === 'MESSAGES_UPSERT' ||
       event === 'onmessage' ||
       body.message ||
       (data.key && !data.key.fromMe)
     ) {
       const key = data.key || body.key || {};
-      if (key.fromMe) return; // Skip attendant's own outgoing echo
-
       const remoteJid = key.remoteJid || body.phone || body.from || '';
+
+      const msgContent =
+        data.message?.conversation ||
+        data.message?.extendedTextMessage?.text ||
+        data.message?.imageMessage?.caption ||
+        (data.message?.imageMessage ? '[Foto]' : null) ||
+        (data.message?.audioMessage ? '[Áudio]' : null) ||
+        (data.message?.documentMessage ? '[Documento]' : null) ||
+        body.text ||
+        body.message ||
+        'Mensagem recebida';
+
+      if (remoteJid.includes('@g.us')) {
+        const pushName = data.pushName || body.pushName || body.senderName || 'Participante do Grupo';
+        this.processInboundGroupMessage({
+          organizationId: targetOrg,
+          groupId: remoteJid,
+          senderName: pushName,
+          senderPhone: key.participant ? String(key.participant).replace(/\D/g, '') : undefined,
+          content: String(msgContent),
+          isFromAgency: key.fromMe === true,
+        });
+        return;
+      }
+
+      if (key.fromMe) return; // Skip attendant's own outgoing echo for direct messages
+
       const cleanPhone = remoteJid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
       if (!cleanPhone) return;
 
       const pushName = data.pushName || body.pushName || body.senderName || `Cliente WhatsApp (${cleanPhone.slice(-4)})`;
-      const msgContent =
-        data.message?.conversation ||
-        data.message?.extendedTextMessage?.text ||
-        body.text ||
-        body.message ||
-        'Mensagem recebida';
 
       this.processInboundMessage({
         organizationId: targetOrg,
@@ -1158,7 +1218,45 @@ export class WhatsAppService {
 
       for (const item of chatsList) {
         const remoteJid = item.id || item.remoteJid || item.jid || '';
-        if (remoteJid.includes('@g.us')) continue; // Skip groups
+        if (!remoteJid) continue;
+
+        // If it is a group, sync to whatsapp_groups!
+        if (remoteJid.includes('@g.us')) {
+          const groupName = item.name || item.subject || 'Grupo WhatsApp Realizze';
+          const groupAvatar = item.profilePictureUrl || item.avatar || null;
+          const lastMsgTime = item.conversationTimestamp
+            ? new Date(Number(item.conversationTimestamp) * 1000).toISOString()
+            : now;
+
+          const existingGroup = dbGet<any>('SELECT * FROM whatsapp_groups WHERE id = ?', [remoteJid]);
+          if (!existingGroup) {
+            dbRun(
+              `INSERT INTO whatsapp_groups (id, organization_id, name, description, participant_count, avatar, last_message, last_message_at, destination_focus, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                remoteJid,
+                organizationId,
+                groupName,
+                'Grupo sincronizado do WhatsApp da agência',
+                item.size || item.participantsCount || 1,
+                groupAvatar,
+                'Grupo sincronizado',
+                lastMsgTime,
+                'Pacotes & Destinos',
+                now,
+                now,
+              ]
+            );
+          } else {
+            dbRun(
+              `UPDATE whatsapp_groups SET name = ?, avatar = COALESCE(?, avatar), updated_at = ? WHERE id = ?`,
+              [groupName, groupAvatar, now, remoteJid]
+            );
+          }
+          importedCount++;
+          continue;
+        }
+
         const cleanPhone = String(remoteJid).replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
         if (cleanPhone.length < 8) continue;
 
@@ -1209,6 +1307,87 @@ export class WhatsAppService {
           );
         }
 
+        // Import chat's last message if present
+        if (item.lastMessage) {
+          const lMsg = item.lastMessage;
+          const isFromMe = lMsg.key?.fromMe === true;
+          const msgContent =
+            lMsg.message?.conversation ||
+            lMsg.message?.extendedTextMessage?.text ||
+            lMsg.message?.imageMessage?.caption ||
+            lMsg.text ||
+            null;
+          const msgId = lMsg.key?.id || `msg_init_${Date.now()}`;
+          const msgTime = lMsg.messageTimestamp
+            ? new Date(Number(lMsg.messageTimestamp) * 1000).toISOString()
+            : lastMsgTime;
+
+          if (msgContent) {
+            const exists = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [msgId]);
+            if (!exists) {
+              const localMsgId = `msg_hist_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+              dbRun(
+                `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, whatsapp_message_id, status, created_at)
+                 VALUES (?, ?, ?, ?, ?, 'text', ?, ?, 'delivered', ?)`,
+                [localMsgId, organizationId, convId, isFromMe ? 'AGENT' : 'CUSTOMER', isFromMe ? 'usr_agent' : customer.id, String(msgContent), msgId, msgTime]
+              );
+            }
+          }
+        }
+
+        // Fetch recent message history from Evolution API for this chat
+        try {
+          const msgFetchUrl = `${baseUrl}/chat/findMessages/${inst}`;
+          const msgResp = await fetch(msgFetchUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              where: {
+                key: {
+                  remoteJid: remoteJid,
+                },
+              },
+              limit: 20,
+            }),
+          });
+
+          if (msgResp.ok) {
+            const historyData = await msgResp.json();
+            const msgsList = Array.isArray(historyData) ? historyData : (historyData.messages || []);
+            for (const hMsg of msgsList) {
+              const hKey = hMsg.key || {};
+              const hFromMe = hKey.fromMe === true;
+              const hContent =
+                hMsg.message?.conversation ||
+                hMsg.message?.extendedTextMessage?.text ||
+                hMsg.message?.imageMessage?.caption ||
+                (hMsg.message?.imageMessage ? '[Foto]' : null) ||
+                (hMsg.message?.audioMessage ? '[Áudio]' : null) ||
+                (hMsg.message?.documentMessage ? '[Documento]' : null) ||
+                hMsg.text ||
+                null;
+              const hId = hKey.id;
+              const hTime = hMsg.messageTimestamp
+                ? new Date(Number(hMsg.messageTimestamp) * 1000).toISOString()
+                : lastMsgTime;
+
+              if (hContent && hId) {
+                const existingH = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [hId]);
+                if (!existingH) {
+                  const localHId = `msg_hist_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+                  dbRun(
+                    `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, whatsapp_message_id, status, created_at)
+                     VALUES (?, ?, ?, ?, ?, 'text', ?, ?, 'delivered', ?)`,
+                    [localHId, organizationId, convId, hFromMe ? 'AGENT' : 'CUSTOMER', hFromMe ? 'usr_agent' : customer.id, String(hContent), hId, hTime]
+                  );
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore single chat fetch errors
+        }
+
         importedCount++;
       }
 
@@ -1226,5 +1405,201 @@ export class WhatsAppService {
       return { count, chats: [] };
     }
   }
+
+  // Live Group Synchronizer from Evolution API
+  public static async syncEvolutionGroups(organizationId: string): Promise<{ count: number; groups: any[] }> {
+    const creds = this.getCredentials(organizationId);
+    if (!creds.gatewayUrl) return { count: 0, groups: [] };
+
+    try {
+      const baseUrl = creds.gatewayUrl.replace(/\/+$/, '');
+      const inst = creds.instanceName || 'realizze-oficial';
+      const url = `${baseUrl}/group/fetchAllGroups/${inst}?getParticipants=false`;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (creds.apiKey) {
+        headers['apikey'] = creds.apiKey.trim();
+        headers['Authorization'] = `Bearer ${creds.apiKey.trim()}`;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const response = await fetch(url, { headers, signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        return { count: 0, groups: [] };
+      }
+
+      const rawList: any[] = await response.json();
+      if (!Array.isArray(rawList)) {
+        return { count: 0, groups: [] };
+      }
+
+      const now = new Date().toISOString();
+      let imported = 0;
+
+      for (const g of rawList) {
+        const gId = g.id || g.jid;
+        if (!gId) continue;
+        const gName = g.subject || g.name || 'Grupo de Viagens';
+        const gDesc = g.desc || g.description || 'Grupo oficial de viagens e pacotes';
+        const pCount = Array.isArray(g.participants) ? g.participants.length : (g.size || 1);
+        const avatar = g.pictureUrl || null;
+
+        const existing = dbGet<any>('SELECT id FROM whatsapp_groups WHERE id = ?', [gId]);
+        if (!existing) {
+          dbRun(
+            `INSERT INTO whatsapp_groups (id, organization_id, name, description, participant_count, avatar, last_message, last_message_at, destination_focus, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              gId,
+              organizationId,
+              gName,
+              gDesc,
+              pCount,
+              avatar,
+              'Grupo sincronizado do WhatsApp',
+              now,
+              'Pacotes & Roteiros',
+              now,
+              now,
+            ]
+          );
+        } else {
+          dbRun(
+            `UPDATE whatsapp_groups SET name = ?, description = ?, participant_count = ?, updated_at = ? WHERE id = ?`,
+            [gName, gDesc, pCount, now, gId]
+          );
+        }
+        imported++;
+      }
+
+      if (imported > 0) {
+        broadcastEvent('groups:updated', { count: imported }, organizationId);
+      }
+
+      return { count: imported, groups: rawList };
+    } catch (err: any) {
+      console.warn('syncEvolutionGroups warning:', err.message);
+      return { count: 0, groups: [] };
+    }
+  }
+
+  // Send message to WhatsApp Group
+  public static async sendGroupMessage(params: {
+    organizationId: string;
+    groupId: string;
+    content: string;
+    senderName: string;
+    senderId?: string;
+  }): Promise<{ success: boolean; messageId: string }> {
+    const { organizationId, groupId, content, senderName } = params;
+    const now = new Date().toISOString();
+    const msgId = `gmsg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+    // 1. Insert into database
+    dbRun(
+      `INSERT INTO whatsapp_group_messages (id, group_id, sender_name, sender_phone, content, is_from_agency, created_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?)`,
+      [msgId, groupId, senderName, '(81) 99535-7254', content, now]
+    );
+
+    dbRun(
+      `UPDATE whatsapp_groups SET last_message = ?, last_message_at = ?, updated_at = ? WHERE id = ?`,
+      [content, now, now, groupId]
+    );
+
+    // Broadcast to all connected agents
+    broadcastEvent('group:message', {
+      groupId,
+      message: {
+        id: msgId,
+        group_id: groupId,
+        sender_name: senderName,
+        content,
+        is_from_agency: true,
+        created_at: now,
+      },
+    }, organizationId);
+
+    // 2. Dispatch to Evolution API if connected
+    const creds = this.getCredentials(organizationId);
+    if (creds.gatewayUrl) {
+      try {
+        const baseUrl = creds.gatewayUrl.replace(/\/+$/, '');
+        const instance = creds.instanceName || 'realizze-oficial';
+        const url = `${baseUrl}/message/sendText/${instance}`;
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (creds.apiKey) {
+          headers['apikey'] = creds.apiKey.trim();
+          headers['Authorization'] = `Bearer ${creds.apiKey.trim()}`;
+        }
+
+        await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            number: groupId,
+            text: content,
+            textMessage: { text: content },
+          }),
+        });
+      } catch (e: any) {
+        console.warn('Failed to dispatch group message via Evolution API:', e.message);
+      }
+    }
+
+    return { success: true, messageId: msgId };
+  }
+
+  // Handle incoming group message from Webhook
+  public static processInboundGroupMessage(params: {
+    organizationId: string;
+    groupId: string;
+    senderName: string;
+    senderPhone?: string;
+    content: string;
+    isFromAgency?: boolean;
+  }): void {
+    const { organizationId, groupId, senderName, senderPhone, content, isFromAgency } = params;
+    const now = new Date().toISOString();
+    const msgId = `gmsg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+    // Ensure group exists in database
+    const existingGroup = dbGet<any>('SELECT id FROM whatsapp_groups WHERE id = ?', [groupId]);
+    if (!existingGroup) {
+      dbRun(
+        `INSERT INTO whatsapp_groups (id, organization_id, name, description, participant_count, last_message, last_message_at, destination_focus, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 1, ?, ?, 'Grupo de Atendimento', ?, ?)`,
+        [groupId, organizationId, 'Grupo WhatsApp Realizze', 'Grupo recebido via WhatsApp', content, now, now, now]
+      );
+    } else {
+      dbRun(
+        `UPDATE whatsapp_groups SET last_message = ?, last_message_at = ?, updated_at = ? WHERE id = ?`,
+        [content, now, now, groupId]
+      );
+    }
+
+    // Insert group message
+    dbRun(
+      `INSERT INTO whatsapp_group_messages (id, group_id, sender_name, sender_phone, content, is_from_agency, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [msgId, groupId, senderName, senderPhone || null, content, isFromAgency ? 1 : 0, now]
+    );
+
+    broadcastEvent('group:message', {
+      groupId,
+      message: {
+        id: msgId,
+        group_id: groupId,
+        sender_name: senderName,
+        sender_phone: senderPhone,
+        content,
+        is_from_agency: isFromAgency || false,
+        created_at: now,
+      },
+    }, organizationId);
+  }
 }
+
 
