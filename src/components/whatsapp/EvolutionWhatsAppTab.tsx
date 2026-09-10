@@ -20,6 +20,11 @@ import {
   Radio,
   Wifi,
   WifiOff,
+  Clock,
+  Maximize2,
+  RotateCcw,
+  X,
+  Sparkles,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { AVATAR_PRESETS } from './WhatsAppConfigView';
@@ -63,13 +68,20 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
   const [isSimulating, setIsSimulating] = useState(false);
   const [simResult, setSimResult] = useState<{ success: boolean; text: string } | null>(null);
 
+  // Auto-refresh countdown & Reset state
+  const [qrCountdown, setQrCountdown] = useState(25);
+  const [isResettingSession, setIsResettingSession] = useState(false);
+  const [isEnlarged, setIsEnlarged] = useState(false);
+
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fetch initial configuration on mount
   useEffect(() => {
     loadSettings();
     return () => {
       stopPolling();
+      stopCountdown();
     };
   }, []);
 
@@ -77,13 +89,37 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
   useEffect(() => {
     if (connectionStatus !== 'CONNECTED') {
       startPolling();
+      startCountdown();
     } else {
       stopPolling();
+      stopCountdown();
     }
     return () => {
       stopPolling();
+      stopCountdown();
     };
-  }, [connectionStatus]);
+  }, [connectionStatus, qrCodeImage]);
+
+  const startCountdown = () => {
+    stopCountdown();
+    countdownTimerRef.current = setInterval(() => {
+      setQrCountdown((prev) => {
+        if (prev <= 1) {
+          // Auto-refresh QR silently when counter reaches 0
+          handleGenerateQr(true);
+          return 25;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const stopCountdown = () => {
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+  };
 
   const startPolling = () => {
     stopPolling();
@@ -101,6 +137,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
             text: '🎉 WhatsApp Conectado com sucesso! Sincronizando conversas, histórico e grupos...',
           });
           stopPolling();
+          stopCountdown();
           api.syncEvolutionChats().catch(console.warn);
           api.syncWhatsAppGroups().catch(console.warn);
         }
@@ -147,10 +184,12 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
     }
   };
 
-  const handleGenerateQr = async () => {
+  const handleGenerateQr = async (silent: boolean = false) => {
     try {
-      setIsLoadingQr(true);
-      setFeedbackMessage(null);
+      if (!silent) {
+        setIsLoadingQr(true);
+        setFeedbackMessage(null);
+      }
       const res = await api.generateWhatsAppQr({
         gatewayUrl: gatewayUrl.trim() || 'http://151.244.40.72:8080',
         instanceName: instanceName.trim() || 'realizze-oficial',
@@ -169,30 +208,78 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
         } else {
           setQrCodeImage(res.qrCode);
           setConnectionStatus('QR_READY');
-          setFeedbackMessage({
-            type: 'info',
-            text: 'QR Code atualizado! Abra o WhatsApp no celular > Aparelhos Conectados > Conectar um aparelho.',
-          });
+          setQrCountdown(25);
+          if (!silent) {
+            setFeedbackMessage({
+              type: 'info',
+              text: 'QR Code atualizado! Abra o WhatsApp no celular > Aparelhos Conectados > Conectar um aparelho.',
+            });
+          }
           startPolling();
         }
       } else {
-        setFeedbackMessage({
-          type: 'error',
-          text: res.message || 'Erro ao gerar QR Code na VPS.',
-        });
+        if (!silent) {
+          setFeedbackMessage({
+            type: 'error',
+            text: res.message || 'Erro ao gerar QR Code na VPS.',
+          });
+        }
       }
     } catch (err: any) {
-      const rawMsg = err.message || '';
-      const friendlyMsg = rawMsg.includes('FUNCTION_INVOCATION_FAILED')
-        ? 'Aguardando inicialização da função do servidor. Clique em "Atualizar QR Code" novamente.'
-        : rawMsg || 'Falha de comunicação com o servidor Evolution API.';
+      if (!silent) {
+        const rawMsg = err.message || '';
+        const friendlyMsg = rawMsg.includes('FUNCTION_INVOCATION_FAILED')
+          ? 'Aguardando inicialização da VPS. Clique em "Atualizar QR Code" novamente.'
+          : rawMsg || 'Falha de comunicação com o servidor Evolution API.';
 
+        setFeedbackMessage({
+          type: 'error',
+          text: friendlyMsg,
+        });
+      }
+    } finally {
+      if (!silent) {
+        setIsLoadingQr(false);
+      }
+    }
+  };
+
+  const handleResetSession = async () => {
+    try {
+      setIsResettingSession(true);
+      setFeedbackMessage({
+        type: 'info',
+        text: 'Reiniciando instância na VPS e gerando um QR Code 100% limpo...',
+      });
+      const res = await api.resetWhatsAppEvolutionSession({
+        gatewayUrl: gatewayUrl.trim() || 'http://151.244.40.72:8080',
+        instanceName: instanceName.trim() || 'realizze-oficial',
+        apiKey: apiKey.trim() || 'Realizze@SecretKey2026',
+      });
+
+      if (res.success && res.qrCode) {
+        setQrCodeImage(res.qrCode);
+        setConnectionStatus('QR_READY');
+        setQrCountdown(25);
+        setFeedbackMessage({
+          type: 'success',
+          text: 'Sessão reiniciada! Um QR Code novo e limpo foi gerado. Aponte o WhatsApp do celular.',
+        });
+        startPolling();
+      } else {
+        setFeedbackMessage({
+          type: 'info',
+          text: 'Instância reiniciada. Atualizando código de pareamento...',
+        });
+        await handleGenerateQr(false);
+      }
+    } catch (err: any) {
       setFeedbackMessage({
         type: 'error',
-        text: friendlyMsg,
+        text: err.message || 'Erro ao reiniciar sessão na Evolution API.',
       });
     } finally {
-      setIsLoadingQr(false);
+      setIsResettingSession(false);
     }
   };
 
@@ -502,7 +589,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
 
             {/* Right Column: QR Code Container */}
             <div className="lg:col-span-5 flex flex-col items-center justify-center">
-              <div className="p-4 bg-white border-2 border-slate-900/10 rounded-2xl shadow-md flex flex-col items-center justify-center relative min-h-[280px] w-full max-w-[280px]">
+              <div className="p-4 bg-white border-2 border-slate-900/15 rounded-2xl shadow-md flex flex-col items-center justify-center relative min-h-[300px] w-full max-w-[310px]">
                 {isLoadingQr ? (
                   <div className="flex flex-col items-center justify-center gap-3 p-6">
                     <RefreshCw className="w-8 h-8 text-emerald-600 animate-spin" />
@@ -511,15 +598,35 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
                     </p>
                   </div>
                 ) : qrCodeImage ? (
-                  <div className="space-y-3 flex flex-col items-center">
-                    <img
-                      src={qrCodeImage}
-                      alt="WhatsApp QR Code"
-                      className="w-56 h-56 object-contain rounded-lg shadow-xs"
-                    />
-                    <div className="flex items-center gap-1.5 text-[11px] text-slate-500 font-medium">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                      <span>Instância: <strong>{instanceName}</strong></span>
+                  <div className="space-y-3 flex flex-col items-center w-full">
+                    {/* QR Code wrapper with white quiet-zone and zoom button */}
+                    <div className="relative group bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs">
+                      <img
+                        src={qrCodeImage}
+                        alt="WhatsApp QR Code"
+                        className="w-56 h-56 sm:w-60 sm:h-60 object-contain rounded-lg"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setIsEnlarged(true)}
+                        className="absolute bottom-2 right-2 p-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-900 text-white text-[10px] font-medium flex items-center gap-1 shadow-md opacity-90 hover:opacity-100 transition-opacity"
+                        title="Ampliar QR Code"
+                      >
+                        <Maximize2 className="w-3 h-3" />
+                        <span>Ampliar</span>
+                      </button>
+                    </div>
+
+                    {/* Auto-refresh timer badge */}
+                    <div className="flex items-center justify-between w-full px-2 text-[11px] text-slate-600">
+                      <div className="flex items-center gap-1.5 font-medium">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <span>Instância: <strong>{instanceName}</strong></span>
+                      </div>
+                      <div className="flex items-center gap-1 font-mono text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md text-[10px]">
+                        <Clock className="w-3 h-3 text-slate-400" />
+                        <span>Atualiza em {qrCountdown}s</span>
+                      </div>
                     </div>
                   </div>
                 ) : (
@@ -532,17 +639,89 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
                 )}
               </div>
 
-              {/* Action button below QR */}
+              {/* Action buttons below QR */}
+              <div className="mt-3 w-full max-w-[310px] space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={isLoadingQr || isResettingSession}
+                    onClick={() => handleGenerateQr(false)}
+                    className="py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition-colors"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingQr ? 'animate-spin' : ''}`} />
+                    <span>{isLoadingQr ? 'Atualizando...' : 'Atualizar QR'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isLoadingQr || isResettingSession}
+                    onClick={handleResetSession}
+                    className="py-2 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                    title="Clique caso o WhatsApp do celular não reconheça o código"
+                  >
+                    <RotateCcw className={`w-3.5 h-3.5 ${isResettingSession ? 'animate-spin' : ''}`} />
+                    <span>{isResettingSession ? 'Limpando...' : 'Reiniciar Sessão'}</span>
+                  </button>
+                </div>
+
+                {/* Scanning hint box */}
+                <div className="p-2.5 rounded-xl bg-amber-50/80 border border-amber-200/70 text-[11px] text-amber-900 leading-tight space-y-1">
+                  <p className="font-semibold flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
+                    <span>Dica para leitura rápida:</span>
+                  </p>
+                  <p className="text-amber-800/90 text-[10px]">
+                    Aproxime o celular a 20-30 cm do monitor. Se o WhatsApp do celular der &quot;Não foi possível conectar&quot;, clique em <strong>Reiniciar Sessão</strong> para gerar uma chave novinha em folha.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ENLARGED QR CODE MODAL */}
+      {isEnlarged && qrCodeImage && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 flex flex-col items-center space-y-4">
+            <div className="flex items-center justify-between w-full">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                <QrCode className="w-4 h-4 text-emerald-600" />
+                <span>Escanear WhatsApp</span>
+              </h3>
               <button
                 type="button"
-                disabled={isLoadingQr}
-                onClick={handleGenerateQr}
-                className="mt-3.5 w-full max-w-[280px] py-2 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-colors"
+                onClick={() => setIsEnlarged(false)}
+                className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingQr ? 'animate-spin' : ''}`} />
-                <span>{isLoadingQr ? 'Carregando...' : 'Atualizar QR Code'}</span>
+                <X className="w-4 h-4" />
               </button>
             </div>
+
+            <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-inner flex items-center justify-center">
+              <img
+                src={qrCodeImage}
+                alt="WhatsApp QR Code Grande"
+                className="w-72 h-72 object-contain"
+              />
+            </div>
+
+            <div className="text-center space-y-1">
+              <p className="text-xs font-semibold text-slate-800">
+                Aponte a câmera em Aparelhos Conectados
+              </p>
+              <p className="text-[11px] text-slate-500 font-mono">
+                Atualização automática em {qrCountdown}s
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsEnlarged(false)}
+              className="w-full py-2 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800"
+            >
+              Fechar
+            </button>
           </div>
         </div>
       )}

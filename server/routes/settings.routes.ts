@@ -400,20 +400,24 @@ settingsRouter.post('/whatsapp/qr/generate', authenticateToken, requireRole(['AD
     // 2. If not connected and no QR yet, call /instance/connect to get live QR code with fast timeout
     if (!isLiveConnected && !qrDataUrl) {
       try {
-        const connectRes = await fetchWithTimeout(`${cleanBase}/instance/connect/${inst}`, { headers }, 3500);
+        const connectRes = await fetchWithTimeout(`${cleanBase}/instance/connect/${inst}`, { headers }, 4500);
         if (connectRes.ok) {
           const connectData: any = await connectRes.json();
-          const b64 = connectData?.base64 || connectData?.qrcode?.base64;
-          if (b64) {
-            qrDataUrl = b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
-          } else if (connectData?.code) {
+          // Prefer generating high-contrast crisp QR code from raw code string if available
+          if (connectData?.code) {
             qrDataUrl = await QRCode.toDataURL(connectData.code, {
               errorCorrectionLevel: 'M',
-              margin: 2,
-              width: 320,
-              color: { dark: '#0f172a', light: '#ffffff' },
+              margin: 3,
+              width: 400,
+              color: { dark: '#000000', light: '#ffffff' },
             });
+          } else {
+            const b64 = connectData?.base64 || connectData?.qrcode?.base64;
+            if (b64) {
+              qrDataUrl = b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
+            }
           }
+
           if (connectData?.instance?.state === 'open' || connectData?.status === 'CONNECTED') {
             isLiveConnected = true;
             connectedPhone = connectData?.instance?.owner || 'WhatsApp Conectado';
@@ -427,61 +431,144 @@ settingsRouter.post('/whatsapp/qr/generate', authenticateToken, requireRole(['AD
       }
     }
 
-    // 3. Fallback scannable pairing QR code if VPS is unreachable or slow
-    if (!qrDataUrl && !isLiveConnected) {
-      const sessionRef = Buffer.from(`realizze_${orgId}_${Date.now()}`).toString('base64');
-      const publicKey = Buffer.from(`pub_${Math.random().toString(36).substring(2)}`).toString('base64');
-      const identityKey = Buffer.from(`id_${Math.random().toString(36).substring(2)}`).toString('base64');
-      const qrRawString = `1@${sessionRef},${publicKey},${identityKey}`;
-
-      qrDataUrl = await QRCode.toDataURL(qrRawString, {
-        errorCorrectionLevel: 'M',
-        margin: 2,
-        width: 320,
-        color: { dark: '#0f172a', light: '#ffffff' },
+    if (qrDataUrl) {
+      try {
+        WhatsAppService.updateGatewayQrCode(orgId, qrDataUrl);
+      } catch {}
+      res.json({
+        success: true,
+        qrCode: qrDataUrl,
+        status: isLiveConnected ? 'CONNECTED' : 'QR_READY',
+        phone: connectedPhone,
+        instanceName: inst,
+        gatewayUrl: cleanBase,
+        message: isLiveConnected
+          ? 'Instância da Evolution API já conectada ao WhatsApp!'
+          : 'QR Code da Evolution API gerado com sucesso! Aponte o WhatsApp do seu celular em Aparelhos Conectados.',
       });
+    } else {
+      res.json({
+        success: false,
+        qrCode: null,
+        status: isLiveConnected ? 'CONNECTED' : 'DISCONNECTED',
+        phone: connectedPhone,
+        instanceName: inst,
+        gatewayUrl: cleanBase,
+        message: 'Aguardando inicialização da instância na VPS. Clique em "Atualizar QR Code".',
+      });
+    }
+  } catch (err: any) {
+    console.error('Error generating QR code:', err);
+    res.status(200).json({
+      success: false,
+      qrCode: null,
+      status: 'DISCONNECTED',
+      message: 'Falha temporária ao comunicar com a VPS. Clique em "Reiniciar Conexão".',
+    });
+  }
+});
+
+// POST /api/settings/whatsapp/evolution/reset - Reset instance session on Evolution API (fixes stale session / pairing issues)
+settingsRouter.post('/whatsapp/evolution/reset', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR', 'AGENT']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const orgId = req.user!.organization_id;
+    const {
+      gatewayUrl = process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080',
+      instanceName = process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial',
+      apiKey = process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026',
+    } = req.body;
+
+    const cleanBase = (gatewayUrl || 'http://151.244.40.72:8080').trim().replace(/\/+$/, '');
+    const inst = (instanceName || 'realizze-oficial').trim();
+    const key = (apiKey || 'Realizze@SecretKey2026').trim();
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'apikey': key,
+      'Authorization': `Bearer ${key}`,
+    };
+
+    // 1. Delete existing instance session
+    try {
+      await fetchWithTimeout(`${cleanBase}/instance/delete/${inst}`, {
+        method: 'DELETE',
+        headers,
+      }, 4000);
+    } catch (delErr) {
+      console.warn('Notice deleting instance on reset:', delErr);
+    }
+
+    // 2. Create brand new instance
+    let qrDataUrl: string | null = null;
+    try {
+      const createRes = await fetchWithTimeout(`${cleanBase}/instance/create`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          instanceName: inst,
+          token: key,
+          qrcode: true,
+          integration: 'WHATSAPP-BAILEYS',
+        }),
+      }, 5000);
+
+      if (createRes.ok) {
+        const createData: any = await createRes.json();
+        const b64 = createData?.base64 || createData?.qrcode?.base64;
+        if (b64) {
+          qrDataUrl = b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
+        }
+      }
+    } catch (createErr) {
+      console.warn('Notice creating fresh instance on reset:', createErr);
+    }
+
+    // 3. Connect to get fresh QR code at count 1
+    if (!qrDataUrl) {
+      try {
+        const connectRes = await fetchWithTimeout(`${cleanBase}/instance/connect/${inst}`, { headers }, 5000);
+        if (connectRes.ok) {
+          const connectData: any = await connectRes.json();
+          if (connectData?.code) {
+            qrDataUrl = await QRCode.toDataURL(connectData.code, {
+              errorCorrectionLevel: 'M',
+              margin: 3,
+              width: 400,
+              color: { dark: '#000000', light: '#ffffff' },
+            });
+          } else if (connectData?.base64) {
+            qrDataUrl = connectData.base64.startsWith('data:') ? connectData.base64 : `data:image/png;base64,${connectData.base64}`;
+          }
+        }
+      } catch (cErr) {
+        console.warn('Notice connecting after reset:', cErr);
+      }
     }
 
     if (qrDataUrl) {
       try {
         WhatsAppService.updateGatewayQrCode(orgId, qrDataUrl);
       } catch {}
-    }
-
-    res.json({
-      success: true,
-      qrCode: qrDataUrl,
-      status: isLiveConnected ? 'CONNECTED' : 'QR_READY',
-      phone: connectedPhone,
-      instanceName: inst,
-      gatewayUrl: cleanBase,
-      message: isLiveConnected
-        ? 'Instância da Evolution API já conectada ao WhatsApp!'
-        : 'QR Code da Evolution API gerado com sucesso! Aponte o WhatsApp do seu celular em Aparelhos Conectados.',
-    });
-  } catch (err: any) {
-    console.error('Error generating QR code:', err);
-    // Never fail hard with 500: generate emergency QR code and respond 200
-    try {
-      const emergencyQr = await QRCode.toDataURL(`realizze_emergency_${Date.now()}`, {
-        errorCorrectionLevel: 'M',
-        margin: 2,
-        width: 320,
-      });
       res.json({
         success: true,
-        qrCode: emergencyQr,
+        qrCode: qrDataUrl,
         status: 'QR_READY',
-        message: 'QR Code gerado em modo de prontidão.',
+        message: 'Sessão reiniciada com sucesso! Um novo QR Code limpo e atualizado foi gerado.',
       });
-    } catch {
-      res.status(200).json({
+    } else {
+      res.json({
         success: false,
-        qrCode: '',
+        qrCode: null,
         status: 'DISCONNECTED',
-        message: 'Aguardando conexão com servidor WhatsApp.',
+        message: 'A instância foi recriada. Clique em "Atualizar QR Code" em alguns segundos.',
       });
     }
+  } catch (err: any) {
+    console.error('Error resetting WhatsApp session:', err);
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Erro ao reiniciar sessão na Evolution API.',
+    });
   }
 });
 

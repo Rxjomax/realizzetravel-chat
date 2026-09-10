@@ -1242,36 +1242,22 @@ class ApiService {
     gatewayUrl?: string;
     instanceName?: string;
     apiKey?: string;
-  }): Promise<{ success: boolean; qrCode: string; status: string; phone?: string; message: string }> {
-    try {
-      return await this.request('/settings/whatsapp/qr/generate', {
-        method: 'POST',
-        body: JSON.stringify(params),
-      });
-    } catch (err: any) {
-      console.warn('Notice generating QR from backend, applying resilient client fallback:', err?.message);
-      try {
-        const sessionRef = btoa(`realizze_${Date.now()}`);
-        const publicKey = btoa(`pub_${Math.random().toString(36).substring(2)}`);
-        const identityKey = btoa(`id_${Math.random().toString(36).substring(2)}`);
-        const qrRawString = `1@${sessionRef},${publicKey},${identityKey}`;
-        const qrDataUrl = await QRCode.toDataURL(qrRawString, {
-          errorCorrectionLevel: 'M',
-          margin: 2,
-          width: 320,
-          color: { dark: '#0f172a', light: '#ffffff' },
-        });
+  }): Promise<{ success: boolean; qrCode: string | null; status: string; phone?: string; message: string }> {
+    return await this.request('/settings/whatsapp/qr/generate', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
 
-        return {
-          success: true,
-          qrCode: qrDataUrl,
-          status: 'QR_READY',
-          message: 'QR Code da Evolution API gerado com sucesso! Aponte o WhatsApp do seu celular em Aparelhos Conectados.',
-        };
-      } catch {
-        throw err;
-      }
-    }
+  public async resetWhatsAppEvolutionSession(params?: {
+    gatewayUrl?: string;
+    instanceName?: string;
+    apiKey?: string;
+  }): Promise<{ success: boolean; qrCode?: string | null; status?: string; message: string }> {
+    return await this.request('/settings/whatsapp/evolution/reset', {
+      method: 'POST',
+      body: JSON.stringify(params || {}),
+    });
   }
 
   public async getWhatsAppLiveStatus(): Promise<{ connected: boolean; status: string; phoneConnected?: string | null }> {
