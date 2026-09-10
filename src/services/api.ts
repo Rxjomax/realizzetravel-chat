@@ -1460,7 +1460,7 @@ class ApiService {
     });
   }
 
-  public async confirmWhatsAppPairing(phone?: string): Promise<{ success: boolean; message: string }> {
+  public async confirmWhatsAppPairing(phone?: string): Promise<{ success: boolean; message: string; phone?: string; status?: string }> {
     return await this.request('/settings/whatsapp/qr/pair-success', {
       method: 'POST',
       body: JSON.stringify({ phone }),

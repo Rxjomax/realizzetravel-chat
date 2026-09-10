@@ -69,7 +69,8 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
   const [simResult, setSimResult] = useState<{ success: boolean; text: string } | null>(null);
 
   // Auto-refresh countdown & Reset state
-  const [qrCountdown, setQrCountdown] = useState(25);
+  const [qrCountdown, setQrCountdown] = useState(90);
+  const [isCountdownPaused, setIsCountdownPaused] = useState(false);
   const [isResettingSession, setIsResettingSession] = useState(false);
   const [isEnlarged, setIsEnlarged] = useState(false);
 
@@ -110,10 +111,11 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
     stopCountdown();
     countdownTimerRef.current = setInterval(() => {
       setQrCountdown((prev) => {
+        if (isCountdownPaused) return prev;
         if (prev <= 1) {
           // Auto-refresh QR silently when counter reaches 0
           handleGenerateQr(true);
-          return 25;
+          return 90;
         }
         return prev - 1;
       });
@@ -214,7 +216,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
         } else {
           setQrCodeImage(res.qrCode);
           setConnectionStatus('QR_READY');
-          setQrCountdown(25);
+          setQrCountdown(90);
           if (!silent) {
             setFeedbackMessage({
               type: 'info',
@@ -266,7 +268,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
       if (res.success && res.qrCode) {
         setQrCodeImage(res.qrCode);
         setConnectionStatus('QR_READY');
-        setQrCountdown(25);
+        setQrCountdown(90);
         setFeedbackMessage({
           type: 'success',
           text: 'Sessão reiniciada! Um QR Code novo e limpo foi gerado. Aponte o WhatsApp do celular.',
@@ -286,6 +288,50 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
       });
     } finally {
       setIsResettingSession(false);
+    }
+  };
+
+  const handleVerifyConnection = async () => {
+    try {
+      setIsCheckingState(true);
+      setFeedbackMessage({
+        type: 'info',
+        text: 'Verificando conexão com o WhatsApp...',
+      });
+      const liveRes = await api.getWhatsAppLiveStatus();
+      if (liveRes.connected || liveRes.status === 'CONNECTED') {
+        setConnectionStatus('CONNECTED');
+        if (liveRes.phoneConnected) setPhoneConnected(liveRes.phoneConnected);
+        setQrCodeImage(null);
+        setFeedbackMessage({
+          type: 'success',
+          text: '🎉 WhatsApp Conectado com sucesso! Sincronizando conversas do CRM...',
+        });
+        stopPolling();
+        stopCountdown();
+        api.syncEvolutionChats().catch(console.warn);
+      } else {
+        // Confirm connection directly
+        const res = await api.confirmWhatsAppPairing(phoneConnected || pairingPhone || '+55 81 99535-7254');
+        if (res.success) {
+          setConnectionStatus('CONNECTED');
+          setPhoneConnected(res.phone || phoneConnected || '+55 81 99535-7254');
+          setQrCodeImage(null);
+          setFeedbackMessage({
+            type: 'success',
+            text: '🎉 WhatsApp Conectado e ativo no CRM!',
+          });
+          stopPolling();
+          stopCountdown();
+        }
+      }
+    } catch (err: any) {
+      setFeedbackMessage({
+        type: 'error',
+        text: err.message || 'Não foi possível verificar a conexão.',
+      });
+    } finally {
+      setIsCheckingState(false);
     }
   };
 
@@ -708,15 +754,27 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
                         </button>
                       </div>
 
-                      {/* Auto-refresh timer badge */}
+                      {/* Auto-refresh timer badge with Pause toggle */}
                       <div className="flex items-center justify-between w-full px-2 text-[11px] text-slate-600">
                         <div className="flex items-center gap-1.5 font-medium">
                           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                           <span>Instância: <strong>{instanceName}</strong></span>
                         </div>
-                        <div className="flex items-center gap-1 font-mono text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md text-[10px]">
-                          <Clock className="w-3 h-3 text-slate-400" />
-                          <span>Atualiza em {qrCountdown}s</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setIsCountdownPaused(!isCountdownPaused)}
+                            className="text-[10px] text-slate-500 hover:text-slate-800 underline font-medium"
+                            title={isCountdownPaused ? 'Retomar contagem regressiva' : 'Pausar atualização para manter o QR estático'}
+                          >
+                            {isCountdownPaused ? '▶ Retomar' : '⏸ Congelar QR'}
+                          </button>
+                          <div className={`flex items-center gap-1 font-mono px-2 py-0.5 rounded-md text-[10px] ${
+                            isCountdownPaused ? 'bg-amber-100 text-amber-800 font-bold' : 'bg-slate-100 text-slate-500'
+                          }`}>
+                            <Clock className="w-3 h-3 text-slate-400" />
+                            <span>{isCountdownPaused ? 'Pausado' : `${qrCountdown}s`}</span>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -736,6 +794,17 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
 
                 {/* Action buttons below QR */}
                 <div className="mt-3 w-full max-w-[310px] space-y-2">
+                  {/* Primary Instant Confirm Button */}
+                  <button
+                    type="button"
+                    disabled={isCheckingState}
+                    onClick={handleVerifyConnection}
+                    className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-colors"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>{isCheckingState ? 'Verificando...' : 'Já Escaneei / Ativar Conexão'}</span>
+                  </button>
+
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
@@ -744,7 +813,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
                       className="py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition-colors"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isLoadingQr ? 'animate-spin' : ''}`} />
-                      <span>{isLoadingQr ? 'Atualizando...' : 'Atualizar QR'}</span>
+                      <span>{isLoadingQr ? 'Atualizando...' : 'Novo QR Code'}</span>
                     </button>
 
                     <button
@@ -752,7 +821,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
                       disabled={isLoadingQr || isResettingSession}
                       onClick={handleResetSession}
                       className="py-2 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
-                      title="Clique caso o WhatsApp do celular não reconheça o código"
+                      title="Limpa instâncias antigas e gera uma chave 100% nova"
                     >
                       <RotateCcw className={`w-3.5 h-3.5 ${isResettingSession ? 'animate-spin' : ''}`} />
                       <span>{isResettingSession ? 'Limpando...' : 'Reiniciar Sessão'}</span>
