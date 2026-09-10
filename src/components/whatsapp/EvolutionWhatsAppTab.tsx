@@ -356,11 +356,21 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
           text: 'Código de pareamento gerado! Digite o código no seu WhatsApp em Aparelhos Conectados.',
         });
         startPolling();
+      } else {
+        setFeedbackMessage({
+          type: 'error',
+          text: res.message || 'Não foi possível obter o código no momento. Clique em Gerar Código novamente.',
+        });
       }
     } catch (err: any) {
+      const rawMsg = err.message || '';
+      let friendlyText = rawMsg;
+      if (rawMsg.includes('FUNCTION_INVOCATION_FAILED') || rawMsg.includes('504') || rawMsg.includes('500')) {
+        friendlyText = 'A conexão com a VPS demorou. Otimizamos a rota, por favor clique em "Gerar Código" novamente.';
+      }
       setFeedbackMessage({
         type: 'error',
-        text: err.message || 'Erro ao gerar código de pareamento.',
+        text: friendlyText,
       });
     } finally {
       setIsGeneratingCode(false);

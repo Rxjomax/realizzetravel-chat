@@ -498,42 +498,53 @@ settingsRouter.post('/whatsapp/pairing-code', flexibleAuth, async (req: Authenti
       'Authorization': `Bearer ${key}`,
     };
 
-    // 1. Delete old instance session to ensure fresh pairing code sequence
-    try {
-      await fetchWithTimeout(`${cleanBase}/instance/delete/${inst}`, {
-        method: 'DELETE',
-        headers,
-      }, 3500);
-    } catch (e) {
-      console.warn('Notice deleting instance before pairing code:', e);
-    }
-
-    // 2. Create instance configured with number
-    try {
-      await fetchWithTimeout(`${cleanBase}/instance/create`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          instanceName: inst,
-          token: key,
-          qrcode: true,
-          number: cleanNumber,
-          integration: 'WHATSAPP-BAILEYS',
-        }),
-      }, 5000);
-    } catch (cErr) {
-      console.warn('Notice creating instance with number:', cErr);
-    }
-
-    // 3. Request connect with number to get pairingCode
+    // 1. Fast path: try connect with number directly on existing instance (< 400ms)
     let pairingCode: string | null = null;
-    const connectRes = await fetchWithTimeout(`${cleanBase}/instance/connect/${inst}?number=${cleanNumber}`, {
-      headers,
-    }, 6000);
+    try {
+      const fastRes = await fetchWithTimeout(
+        `${cleanBase}/instance/connect/${inst}?number=${cleanNumber}`,
+        { headers },
+        2500
+      );
+      if (fastRes.ok) {
+        const data: any = await fastRes.json();
+        pairingCode = data.pairingCode || null;
+      }
+    } catch (fastErr) {
+      console.warn('Fast pairing code attempt notice:', fastErr);
+    }
 
-    if (connectRes.ok) {
-      const data: any = await connectRes.json();
-      pairingCode = data.pairingCode || null;
+    // 2. Fallback path: If instance is missing or did not return code, create/ensure instance and retry
+    if (!pairingCode) {
+      try {
+        await fetchWithTimeout(
+          `${cleanBase}/instance/create`,
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              instanceName: inst,
+              token: key,
+              qrcode: true,
+              number: cleanNumber,
+              integration: 'WHATSAPP-BAILEYS',
+            }),
+          },
+          3000
+        );
+
+        const retryRes = await fetchWithTimeout(
+          `${cleanBase}/instance/connect/${inst}?number=${cleanNumber}`,
+          { headers },
+          2500
+        );
+        if (retryRes.ok) {
+          const retryData: any = await retryRes.json();
+          pairingCode = retryData.pairingCode || null;
+        }
+      } catch (retryErr) {
+        console.warn('Fallback pairing code retry notice:', retryErr);
+      }
     }
 
     if (pairingCode) {
