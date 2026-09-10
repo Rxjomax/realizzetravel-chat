@@ -35,7 +35,25 @@ export default async function handler(req: any, res: any) {
   const rawUrl = req.url || '';
   const forwardedUri = (req.headers['x-forwarded-uri'] as string) || '';
   const matchedPath = (req.headers['x-matched-path'] as string) || '';
-  const requestPath = forwardedUri || matchedPath || rawUrl;
+  const queryPath = (req.query?.path as string) || (req.query?.__path as string) || '';
+  const routeMatches = (req.headers['x-now-route-matches'] as string) || '';
+  
+  let normalizedPath = rawUrl;
+  if (queryPath) {
+    normalizedPath = `/api/${queryPath.replace(/^\/+/, '')}`;
+  } else if (forwardedUri) {
+    normalizedPath = forwardedUri;
+  } else if (matchedPath) {
+    normalizedPath = matchedPath;
+  } else if (routeMatches.includes('1=')) {
+    const matched = decodeURIComponent(routeMatches.split('1=')[1]?.split('&')[0] || '');
+    if (matched) normalizedPath = `/api/${matched.replace(/^\/+/, '')}`;
+  }
+
+  const requestPath = normalizedPath;
+  if (req.url && (req.url.startsWith('/api/index') || req.url === '/api')) {
+    req.url = normalizedPath;
+  }
 
   // 2. FAST PATH: Instant Meta Webhook Challenge (<2ms response)
   if (requestPath.includes('/webhooks/whatsapp')) {

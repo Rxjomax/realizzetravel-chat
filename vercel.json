@@ -1,21 +1,34 @@
 {
   "version": 2,
   "functions": {
-    "api/index.ts": {
+    "api/**/*.ts": {
       "maxDuration": 15
-    },
-    "api/webhooks/whatsapp.ts": {
-      "maxDuration": 10
     }
   },
   "rewrites": [
+    {
+      "source": "/api/settings/whatsapp/qr/generate",
+      "destination": "/api/settings/whatsapp/qr/generate"
+    },
+    {
+      "source": "/api/settings/whatsapp/evolution/reset",
+      "destination": "/api/settings/whatsapp/evolution/reset"
+    },
+    {
+      "source": "/api/settings/whatsapp/status",
+      "destination": "/api/settings/whatsapp/status"
+    },
+    {
+      "source": "/api/settings/whatsapp/config",
+      "destination": "/api/settings/whatsapp/config"
+    },
     {
       "source": "/api/webhooks/whatsapp",
       "destination": "/api/webhooks/whatsapp"
     },
     {
       "source": "/api/(.*)",
-      "destination": "/api/index"
+      "destination": "/api/index?path=$1"
     },
     {
       "source": "/(.*)",
