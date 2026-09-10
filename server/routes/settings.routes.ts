@@ -647,7 +647,14 @@ settingsRouter.post('/whatsapp/evolution/reset', flexibleAuth, async (req: Authe
       'Authorization': `Bearer ${key}`,
     };
 
-    // 1. Delete existing instance session
+    // 1. Logout and Delete existing instance session
+    try {
+      await fetchWithTimeout(`${cleanBase}/instance/logout/${inst}`, {
+        method: 'DELETE',
+        headers,
+      }, 4000);
+    } catch {}
+
     try {
       await fetchWithTimeout(`${cleanBase}/instance/delete/${inst}`, {
         method: 'DELETE',

@@ -107,7 +107,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
       stopPolling();
       stopCountdown();
     };
-  }, [connectionStatus, qrCodeImage]);
+  }, [connectionStatus]);
 
   const startCountdown = () => {
     stopCountdown();
@@ -115,9 +115,9 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
       setQrCountdown((prev) => {
         if (isCountdownPaused) return prev;
         if (prev <= 1) {
-          // Auto-refresh QR with fresh socket when counter reaches 0
-          handleGenerateQr(true, true);
-          return 60;
+          // Refresh QR smoothly when counter reaches 0
+          handleGenerateQr(true, false);
+          return 90;
         }
         return prev - 1;
       });
