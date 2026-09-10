@@ -1330,41 +1330,10 @@ class ApiService {
     instanceName?: string;
     apiKey?: string;
   }): Promise<{ success: boolean; pairingCode: string | null; message: string }> {
-    const cleanNumber = params.phoneNumber.replace(/\D/g, '');
-    const cleanBase = (params.gatewayUrl || 'http://151.244.40.72:8080').trim().replace(/\/+$/, '');
-    const inst = (params.instanceName || 'realizze-oficial').trim();
-    const key = (params.apiKey || 'Realizze@SecretKey2026').trim();
-
-    try {
-      const res = await fetch(`${cleanBase}/instance/connect/${inst}?number=${cleanNumber}`, {
-        headers: { 'apikey': key, 'Authorization': `Bearer ${key}` },
-      });
-      if (res.ok) {
-        const data: any = await res.json();
-        if (data.pairingCode) {
-          return {
-            success: true,
-            pairingCode: data.pairingCode,
-            message: 'Código de 8 dígitos gerado! Digite no seu WhatsApp no celular.',
-          };
-        }
-      }
-    } catch (e) {
-      console.warn('Pairing code direct notice:', e);
-    }
-
-    // Deterministic generated pairing code format (e.g. ABCD-1234)
-    const randomChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let code = '';
-    for (let i = 0; i < 8; i++) {
-      if (i === 4) code += '-';
-      code += randomChars.charAt(Math.floor(Math.random() * randomChars.length));
-    }
-    return {
-      success: true,
-      pairingCode: code,
-      message: 'Código de pareamento gerado! Digite no seu WhatsApp em "Conectar com número de telefone".',
-    };
+    return await this.request('/settings/whatsapp/pairing-code', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
   }
 
   public async resetWhatsAppEvolutionSession(params?: {

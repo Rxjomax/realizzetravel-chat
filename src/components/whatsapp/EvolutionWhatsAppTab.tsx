@@ -76,7 +76,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
 
   // Pairing Options State (QR Code vs 8-digit Code)
   const [pairingMode, setPairingMode] = useState<'QR_CODE' | 'PAIRING_CODE'>('QR_CODE');
-  const [pairingPhone, setPairingPhone] = useState('+55 (11) 98765-4321');
+  const [pairingPhone, setPairingPhone] = useState('+55 (81) 99535-7254');
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [isGeneratingCode, setIsGeneratingCode] = useState(false);
 
@@ -370,17 +370,34 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
   const handleDirectPairingConnect = async () => {
     try {
       setIsCheckingState(true);
-      const cleaned = (pairingPhone || '+55 (11) 98765-4321').trim();
+      const cleaned = (pairingPhone || phoneConnected || '+55 (81) 99535-7254').trim();
+
+      // Check live status first
+      const live = await api.getWhatsAppLiveStatus().catch(() => null);
+      if (live && (live.connected || live.status === 'CONNECTED')) {
+        setPhoneConnected(live.phoneConnected || cleaned);
+        setConnectionStatus('CONNECTED');
+        setFeedbackMessage({
+          type: 'success',
+          text: `🎉 WhatsApp conectado com sucesso! Sincronizando conversas...`,
+        });
+        stopPolling();
+        stopCountdown();
+        api.syncEvolutionChats().catch(console.warn);
+        return;
+      }
+
       const res = await api.confirmWhatsAppPairing(cleaned);
       if (res.success) {
         setPhoneConnected(cleaned);
         setConnectionStatus('CONNECTED');
         setFeedbackMessage({
           type: 'success',
-          text: `WhatsApp ${cleaned} conectado e sincronizado com o CRM!`,
+          text: `🎉 WhatsApp ${cleaned} conectado e ativo no CRM!`,
         });
         stopPolling();
         stopCountdown();
+        api.syncEvolutionChats().catch(console.warn);
       }
     } catch (err: any) {
       setFeedbackMessage({
@@ -922,22 +939,43 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
                   </div>
 
                   {pairingCode ? (
-                    <div className="p-4 bg-slate-900 text-white rounded-xl text-center space-y-2 shadow-inner">
-                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                        Código de Pareamento WhatsApp
-                      </p>
-                      <div className="text-2xl font-black font-mono tracking-widest text-emerald-400 py-1 select-all">
-                        {pairingCode}
+                    <div className="p-4 bg-slate-900 text-white rounded-xl text-center space-y-3 shadow-inner">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                          Código Oficial WhatsApp (Baileys)
+                        </p>
+                        <span className="px-1.5 py-0.5 rounded-sm bg-emerald-950 text-emerald-400 text-[10px] font-mono font-bold">
+                          Ativo
+                        </span>
                       </div>
+
+                      {/* Grouped 4-by-4 characters for easy reading */}
+                      <div className="flex items-center justify-center gap-2 py-1">
+                        <span className="px-3 py-1.5 bg-slate-800 rounded-lg text-2xl font-black font-mono tracking-widest text-emerald-400 border border-slate-700 select-all">
+                          {pairingCode.length >= 4 ? pairingCode.substring(0, 4) : pairingCode}
+                        </span>
+                        <span className="text-xl font-black text-slate-500">-</span>
+                        <span className="px-3 py-1.5 bg-slate-800 rounded-lg text-2xl font-black font-mono tracking-widest text-emerald-400 border border-slate-700 select-all">
+                          {pairingCode.length >= 8 ? pairingCode.substring(4, 8) : ''}
+                        </span>
+                      </div>
+
+                      <div className="text-[11px] text-slate-300 bg-slate-800/80 p-2.5 rounded-lg text-left space-y-1 border border-slate-700/60">
+                        <p className="font-bold text-emerald-400">Como inserir no celular:</p>
+                        <p>1. No WhatsApp, vá em <strong>Aparelhos Conectados</strong> &gt; <strong>Conectar um aparelho</strong>.</p>
+                        <p>2. Na tela da câmera, toque em <strong>&quot;Conectar com número de telefone&quot;</strong> (embaixo).</p>
+                        <p>3. Digite o código acima ({pairingCode}).</p>
+                      </div>
+
                       <button
                         type="button"
                         onClick={() => handleCopy(pairingCode, 'code')}
-                        className="w-full py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+                        className="w-full py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors border border-slate-700"
                       >
                         {copiedField === 'code' ? (
                           <>
                             <Check className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>Código Copiado!</span>
+                            <span className="text-emerald-400">Código Copiado!</span>
                           </>
                         ) : (
                           <>
@@ -948,21 +986,25 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
                       </button>
                     </div>
                   ) : (
-                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-center space-y-2">
-                      <Key className="w-6 h-6 text-slate-400 mx-auto" />
-                      <p className="text-xs text-slate-600">
-                        Clique em <strong>Gerar Código</strong> acima para exibir seu código de 8 dígitos.
+                    <div className="p-5 bg-slate-50 border border-slate-200 rounded-xl text-center space-y-2">
+                      <Key className="w-7 h-7 text-blue-500 mx-auto" />
+                      <p className="text-xs font-bold text-slate-800">
+                        Conecte seu WhatsApp sem precisar da câmera
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        Clique no botão azul <strong>Gerar Código</strong> acima para receber o código oficial de 8 dígitos.
                       </p>
                     </div>
                   )}
 
                   <button
                     type="button"
+                    disabled={isCheckingState}
                     onClick={handleDirectPairingConnect}
                     className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>Confirmar Conexão do Número</span>
+                    <span>{isCheckingState ? 'Verificando...' : 'Já Digitei no Celular / Ativar Conexão'}</span>
                   </button>
                 </div>
               </div>

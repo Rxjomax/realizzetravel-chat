@@ -468,6 +468,97 @@ settingsRouter.post('/whatsapp/qr/generate', flexibleAuth, async (req: Authentic
   }
 });
 
+// POST /api/settings/whatsapp/pairing-code - Generate real 8-digit Baileys WhatsApp pairing code
+settingsRouter.post('/whatsapp/pairing-code', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const {
+      phoneNumber,
+      gatewayUrl = process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080',
+      instanceName = process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial',
+      apiKey = process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026',
+    } = req.body;
+
+    if (!phoneNumber) {
+      res.status(400).json({ success: false, message: 'Número de telefone é obrigatório.' });
+      return;
+    }
+
+    let cleanNumber = String(phoneNumber).replace(/\D/g, '');
+    if (cleanNumber.length === 10 || cleanNumber.length === 11) {
+      cleanNumber = '55' + cleanNumber;
+    }
+
+    const cleanBase = (gatewayUrl || 'http://151.244.40.72:8080').trim().replace(/\/+$/, '');
+    const inst = (instanceName || 'realizze-oficial').trim();
+    const key = (apiKey || 'Realizze@SecretKey2026').trim();
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'apikey': key,
+      'Authorization': `Bearer ${key}`,
+    };
+
+    // 1. Delete old instance session to ensure fresh pairing code sequence
+    try {
+      await fetchWithTimeout(`${cleanBase}/instance/delete/${inst}`, {
+        method: 'DELETE',
+        headers,
+      }, 3500);
+    } catch (e) {
+      console.warn('Notice deleting instance before pairing code:', e);
+    }
+
+    // 2. Create instance configured with number
+    try {
+      await fetchWithTimeout(`${cleanBase}/instance/create`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          instanceName: inst,
+          token: key,
+          qrcode: true,
+          number: cleanNumber,
+          integration: 'WHATSAPP-BAILEYS',
+        }),
+      }, 5000);
+    } catch (cErr) {
+      console.warn('Notice creating instance with number:', cErr);
+    }
+
+    // 3. Request connect with number to get pairingCode
+    let pairingCode: string | null = null;
+    const connectRes = await fetchWithTimeout(`${cleanBase}/instance/connect/${inst}?number=${cleanNumber}`, {
+      headers,
+    }, 6000);
+
+    if (connectRes.ok) {
+      const data: any = await connectRes.json();
+      pairingCode = data.pairingCode || null;
+    }
+
+    if (pairingCode) {
+      res.json({
+        success: true,
+        pairingCode,
+        number: cleanNumber,
+        message: 'Código de 8 dígitos gerado pela Evolution API com sucesso!',
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        pairingCode: null,
+        message: 'A Evolution API não retornou o código de pareamento. Tente novamente em alguns instantes.',
+      });
+    }
+  } catch (err: any) {
+    console.error('Error generating pairing code:', err);
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Erro ao gerar código de pareamento.',
+    });
+  }
+});
+
 // POST /api/settings/whatsapp/evolution/reset - Reset instance session on Evolution API (fixes stale session / pairing issues)
 settingsRouter.post('/whatsapp/evolution/reset', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
