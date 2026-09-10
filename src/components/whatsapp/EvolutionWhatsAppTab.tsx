@@ -115,9 +115,9 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
       setQrCountdown((prev) => {
         if (isCountdownPaused) return prev;
         if (prev <= 1) {
-          // Auto-refresh QR silently when counter reaches 0
-          handleGenerateQr(true);
-          return 90;
+          // Auto-refresh QR with fresh socket when counter reaches 0
+          handleGenerateQr(true, true);
+          return 60;
         }
         return prev - 1;
       });
@@ -198,7 +198,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
     }
   };
 
-  const handleGenerateQr = async (silent: boolean = false) => {
+  const handleGenerateQr = async (silent: boolean = false, forceRestart: boolean = false) => {
     try {
       if (!silent) {
         setIsLoadingQr(true);
@@ -208,6 +208,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
         gatewayUrl: gatewayUrl.trim() || 'http://151.244.40.72:8080',
         instanceName: instanceName.trim() || 'realizze-oficial',
         apiKey: apiKey.trim() || 'Realizze@SecretKey2026',
+        forceRestart,
       });
 
       if (res.success) {
@@ -222,11 +223,11 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
         } else {
           setQrCodeImage(res.qrCode);
           setConnectionStatus('QR_READY');
-          setQrCountdown(90);
+          setQrCountdown(60);
           if (!silent) {
             setFeedbackMessage({
               type: 'info',
-              text: 'QR Code atualizado! Abra o WhatsApp no celular > Aparelhos Conectados > Conectar um aparelho.',
+              text: 'QR Code atualizado e pronto para leitura! Abra o WhatsApp no celular > Aparelhos Conectados > Conectar um aparelho.',
             });
           }
           startPolling();
@@ -243,7 +244,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
       if (!silent) {
         const rawMsg = err.message || '';
         const friendlyMsg = rawMsg.includes('FUNCTION_INVOCATION_FAILED')
-          ? 'Aguardando inicialização da VPS. Clique em "Atualizar QR Code" novamente.'
+          ? 'Aguardando inicialização da VPS. Clique em "Novo QR Code" novamente.'
           : rawMsg || 'Falha de comunicação com o servidor Evolution API.';
 
         setFeedbackMessage({
@@ -851,7 +852,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
                       <Smartphone className="w-12 h-12 text-slate-300" />
                       <button
                         type="button"
-                        onClick={() => handleGenerateQr(false)}
+                        onClick={() => handleGenerateQr(false, true)}
                         className="py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors"
                       >
                         Carregar QR Code
@@ -877,7 +878,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
                     <button
                       type="button"
                       disabled={isLoadingQr || isResettingSession}
-                      onClick={() => handleGenerateQr(false)}
+                      onClick={() => handleGenerateQr(false, true)}
                       className="py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition-colors"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isLoadingQr ? 'animate-spin' : ''}`} />

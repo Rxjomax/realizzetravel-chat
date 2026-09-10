@@ -1243,6 +1243,7 @@ class ApiService {
     instanceName?: string;
     apiKey?: string;
     phoneNumber?: string;
+    forceRestart?: boolean;
   }): Promise<{ success: boolean; qrCode: string | null; pairingCode?: string | null; status: string; phone?: string; message: string }> {
     try {
       const res: any = await this.request('/settings/whatsapp/qr/generate', {
@@ -1262,6 +1263,13 @@ class ApiService {
     const key = (params.apiKey || 'Realizze@SecretKey2026').trim();
 
     try {
+      if (params.forceRestart) {
+        await fetch(`${cleanBase}/instance/restart/${inst}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'apikey': key, 'Authorization': `Bearer ${key}` },
+        }).catch(() => {});
+      }
+
       const connectRes = await fetch(`${cleanBase}/instance/connect/${inst}${params.phoneNumber ? `?number=${encodeURIComponent(params.phoneNumber)}` : ''}`, {
         headers: { 'apikey': key, 'Authorization': `Bearer ${key}` },
       });
@@ -1298,30 +1306,12 @@ class ApiService {
       console.warn('Direct connection notice:', directErr);
     }
 
-    // High-res instant fallback QR Code so the screen is NEVER blank
-    try {
-      const fallbackToken = `2@${Date.now()},${inst},${Math.random().toString(36).substring(2, 10)}`;
-      const fallbackQr = await QRCode.toDataURL(fallbackToken, {
-        errorCorrectionLevel: 'M',
-        margin: 3,
-        width: 400,
-        color: { dark: '#0f172a', light: '#ffffff' },
-      });
-      return {
-        success: true,
-        qrCode: fallbackQr,
-        pairingCode: 'RLZ-' + Math.floor(1000 + Math.random() * 9000),
-        status: 'QR_READY',
-        message: 'Código de pareamento gerado! Aponte o WhatsApp em Aparelhos Conectados.',
-      };
-    } catch {
-      return {
-        success: true,
-        qrCode: null,
-        status: 'QR_READY',
-        message: 'Aponte o WhatsApp do seu celular para conectar.',
-      };
-    }
+    return {
+      success: false,
+      qrCode: null,
+      status: 'DISCONNECTED',
+      message: 'Não foi possível carregar o QR Code da Evolution API. Clique em "Novo QR Code".',
+    };
   }
 
   public async getWhatsAppPairingCode(params: {

@@ -332,6 +332,29 @@ async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 3500
   }
 }
 
+// Helper to extract crisp QR Code data URL from Evolution API response
+async function extractQrDataUrl(data: any): Promise<string | null> {
+  if (!data) return null;
+  const rawCode = data.code || data.qrcode?.code;
+  if (rawCode && typeof rawCode === 'string') {
+    try {
+      return await QRCode.toDataURL(rawCode, {
+        errorCorrectionLevel: 'M',
+        margin: 3,
+        width: 400,
+        color: { dark: '#000000', light: '#ffffff' },
+      });
+    } catch (qrErr) {
+      console.warn('Notice generating QR code from code string:', qrErr);
+    }
+  }
+  const b64 = data.base64 || data.qrcode?.base64;
+  if (b64 && typeof b64 === 'string') {
+    return b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
+  }
+  return null;
+}
+
 // POST /api/settings/whatsapp/qr/generate - Connect & Request QR code for phone pairing (Evolution API & Direct QR)
 settingsRouter.post('/whatsapp/qr/generate', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -340,6 +363,7 @@ settingsRouter.post('/whatsapp/qr/generate', flexibleAuth, async (req: Authentic
       gatewayUrl = process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080',
       instanceName = process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial',
       apiKey = process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026',
+      forceRestart = false,
     } = req.body;
 
     let qrDataUrl: string | null = null;
@@ -356,67 +380,84 @@ settingsRouter.post('/whatsapp/qr/generate', flexibleAuth, async (req: Authentic
       'Authorization': `Bearer ${key}`,
     };
 
-    // 1. Check Evolution API instance state with fast timeout
+    let currentState = 'close';
+    let instanceExists = true;
+
+    // 1. Check Evolution API instance state
     try {
-      const stateRes = await fetchWithTimeout(`${cleanBase}/instance/connectionState/${inst}`, { headers }, 3000);
+      const stateRes = await fetchWithTimeout(`${cleanBase}/instance/connectionState/${inst}`, { headers }, 3500);
       if (stateRes.ok) {
         const stateData: any = await stateRes.json();
-        const state = stateData?.instance?.state || stateData?.state;
-        if (state === 'open' || state === 'CONNECTED') {
+        currentState = stateData?.instance?.state || stateData?.state || 'close';
+        if (currentState === 'open' || currentState === 'CONNECTED') {
           isLiveConnected = true;
           connectedPhone = stateData?.instance?.owner || stateData?.owner || 'WhatsApp Conectado';
           try {
             WhatsAppService.updateGatewayConnectionStatus(orgId, 'CONNECTED', connectedPhone || undefined);
           } catch {}
+          res.json({
+            success: true,
+            qrCode: null,
+            status: 'CONNECTED',
+            phone: connectedPhone,
+            instanceName: inst,
+            gatewayUrl: cleanBase,
+            message: 'Instância da Evolution API já conectada ao WhatsApp!',
+          });
+          return;
         }
       } else if (stateRes.status === 404) {
-        // Instance does not exist yet -> Create it automatically with fast timeout!
-        try {
-          const createRes = await fetchWithTimeout(`${cleanBase}/instance/create`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-              instanceName: inst,
-              token: key,
-              qrcode: true,
-              integration: 'WHATSAPP-BAILEYS',
-            }),
-          }, 3500);
-          if (createRes.ok) {
-            const createData: any = await createRes.json();
-            const b64 = createData?.base64 || createData?.qrcode?.base64;
-            if (b64) {
-              qrDataUrl = b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
-            }
-          }
-        } catch (cErr) {
-          console.warn('Notice creating instance on Evolution API:', cErr);
-        }
+        instanceExists = false;
       }
     } catch (evoErr) {
       console.warn('Notice checking instance state:', evoErr);
     }
 
-    // 2. If not connected and no QR yet, call /instance/connect to get live QR code with fast timeout
-    if (!isLiveConnected && !qrDataUrl) {
+    // 2. If instance doesn't exist, create it
+    if (!instanceExists) {
       try {
-        const connectRes = await fetchWithTimeout(`${cleanBase}/instance/connect/${inst}`, { headers }, 4500);
+        const createRes = await fetchWithTimeout(`${cleanBase}/instance/create`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            instanceName: inst,
+            token: key,
+            qrcode: true,
+            integration: 'WHATSAPP-BAILEYS',
+          }),
+        }, 6000);
+        if (createRes.ok) {
+          const createData: any = await createRes.json();
+          qrDataUrl = await extractQrDataUrl(createData);
+        }
+      } catch (cErr) {
+        console.warn('Notice creating instance on Evolution API:', cErr);
+      }
+    }
+
+    // 3. If forceRestart was explicitly requested OR state is 'close', restart socket to get immediate fresh QR
+    if (!qrDataUrl && (forceRestart || currentState === 'close')) {
+      try {
+        const restartRes = await fetchWithTimeout(`${cleanBase}/instance/restart/${inst}`, {
+          method: 'POST',
+          headers,
+        }, 7000);
+        if (restartRes.ok) {
+          const restartData: any = await restartRes.json();
+          qrDataUrl = await extractQrDataUrl(restartData);
+        }
+      } catch (rErr) {
+        console.warn('Notice restarting instance on Evolution API:', rErr);
+      }
+    }
+
+    // 4. If still no QR, call /instance/connect
+    if (!qrDataUrl) {
+      try {
+        const connectRes = await fetchWithTimeout(`${cleanBase}/instance/connect/${inst}`, { headers }, 7000);
         if (connectRes.ok) {
           const connectData: any = await connectRes.json();
-          // Prefer generating high-contrast crisp QR code from raw code string if available
-          if (connectData?.code) {
-            qrDataUrl = await QRCode.toDataURL(connectData.code, {
-              errorCorrectionLevel: 'M',
-              margin: 3,
-              width: 400,
-              color: { dark: '#000000', light: '#ffffff' },
-            });
-          } else {
-            const b64 = connectData?.base64 || connectData?.qrcode?.base64;
-            if (b64) {
-              qrDataUrl = b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
-            }
-          }
+          qrDataUrl = await extractQrDataUrl(connectData);
 
           if (connectData?.instance?.state === 'open' || connectData?.status === 'CONNECTED') {
             isLiveConnected = true;
@@ -427,7 +468,23 @@ settingsRouter.post('/whatsapp/qr/generate', flexibleAuth, async (req: Authentic
           }
         }
       } catch (connErr) {
-        console.warn('Notice fetching QR code from Evolution API:', connErr);
+        console.warn('Notice fetching QR code from connect endpoint:', connErr);
+      }
+    }
+
+    // 5. Fallback: if connect timed out or failed to return a QR, force restart the socket
+    if (!qrDataUrl && !isLiveConnected) {
+      try {
+        const fallbackRestart = await fetchWithTimeout(`${cleanBase}/instance/restart/${inst}`, {
+          method: 'POST',
+          headers,
+        }, 6000);
+        if (fallbackRestart.ok) {
+          const fallbackData: any = await fallbackRestart.json();
+          qrDataUrl = await extractQrDataUrl(fallbackData);
+        }
+      } catch (fbErr) {
+        console.warn('Notice in fallback restart for QR:', fbErr);
       }
     }
 
@@ -616,10 +673,7 @@ settingsRouter.post('/whatsapp/evolution/reset', flexibleAuth, async (req: Authe
 
       if (createRes.ok) {
         const createData: any = await createRes.json();
-        const b64 = createData?.base64 || createData?.qrcode?.base64;
-        if (b64) {
-          qrDataUrl = b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
-        }
+        qrDataUrl = await extractQrDataUrl(createData);
       }
     } catch (createErr) {
       console.warn('Notice creating fresh instance on reset:', createErr);
@@ -628,23 +682,28 @@ settingsRouter.post('/whatsapp/evolution/reset', flexibleAuth, async (req: Authe
     // 3. Connect to get fresh QR code at count 1
     if (!qrDataUrl) {
       try {
-        const connectRes = await fetchWithTimeout(`${cleanBase}/instance/connect/${inst}`, { headers }, 5000);
+        const connectRes = await fetchWithTimeout(`${cleanBase}/instance/connect/${inst}`, { headers }, 6000);
         if (connectRes.ok) {
           const connectData: any = await connectRes.json();
-          if (connectData?.code) {
-            qrDataUrl = await QRCode.toDataURL(connectData.code, {
-              errorCorrectionLevel: 'M',
-              margin: 3,
-              width: 400,
-              color: { dark: '#000000', light: '#ffffff' },
-            });
-          } else if (connectData?.base64) {
-            qrDataUrl = connectData.base64.startsWith('data:') ? connectData.base64 : `data:image/png;base64,${connectData.base64}`;
-          }
+          qrDataUrl = await extractQrDataUrl(connectData);
         }
       } catch (cErr) {
         console.warn('Notice connecting after reset:', cErr);
       }
+    }
+
+    // 4. Fallback: restart instance
+    if (!qrDataUrl) {
+      try {
+        const restartRes = await fetchWithTimeout(`${cleanBase}/instance/restart/${inst}`, {
+          method: 'POST',
+          headers,
+        }, 5000);
+        if (restartRes.ok) {
+          const restartData: any = await restartRes.json();
+          qrDataUrl = await extractQrDataUrl(restartData);
+        }
+      } catch {}
     }
 
     if (qrDataUrl) {
