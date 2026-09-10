@@ -182,9 +182,14 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
         });
       }
     } catch (err: any) {
+      const rawMsg = err.message || '';
+      const friendlyMsg = rawMsg.includes('FUNCTION_INVOCATION_FAILED')
+        ? 'Aguardando inicialização da função do servidor. Clique em "Atualizar QR Code" novamente.'
+        : rawMsg || 'Falha de comunicação com o servidor Evolution API.';
+
       setFeedbackMessage({
         type: 'error',
-        text: err.message || 'Falha de comunicação com o servidor Evolution API.',
+        text: friendlyMsg,
       });
     } finally {
       setIsLoadingQr(false);
