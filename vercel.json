@@ -1,5 +1,13 @@
 {
   "version": 2,
+  "functions": {
+    "api/index.ts": {
+      "maxDuration": 15
+    },
+    "api/webhooks/whatsapp.ts": {
+      "maxDuration": 10
+    }
+  },
   "rewrites": [
     {
       "source": "/api/webhooks/whatsapp",

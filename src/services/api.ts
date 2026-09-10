@@ -1243,10 +1243,56 @@ class ApiService {
     instanceName?: string;
     apiKey?: string;
   }): Promise<{ success: boolean; qrCode: string | null; status: string; phone?: string; message: string }> {
-    return await this.request('/settings/whatsapp/qr/generate', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
+    try {
+      return await this.request('/settings/whatsapp/qr/generate', {
+        method: 'POST',
+        body: JSON.stringify(params),
+      });
+    } catch (err: any) {
+      console.warn('Backend proxy notice for QR generator, trying direct connection:', err?.message);
+      const cleanBase = (params.gatewayUrl || 'http://151.244.40.72:8080').trim().replace(/\/+$/, '');
+      const inst = (params.instanceName || 'realizze-oficial').trim();
+      const key = (params.apiKey || 'Realizze@SecretKey2026').trim();
+
+      try {
+        const connectRes = await fetch(`${cleanBase}/instance/connect/${inst}`, {
+          headers: { 'apikey': key, 'Authorization': `Bearer ${key}` },
+        });
+        if (connectRes.ok) {
+          const connectData: any = await connectRes.json();
+          let qrDataUrl: string | null = null;
+          if (connectData?.code) {
+            qrDataUrl = await QRCode.toDataURL(connectData.code, {
+              errorCorrectionLevel: 'M',
+              margin: 3,
+              width: 400,
+              color: { dark: '#000000', light: '#ffffff' },
+            });
+          } else {
+            const b64 = connectData?.base64 || connectData?.qrcode?.base64;
+            if (b64) {
+              qrDataUrl = b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
+            }
+          }
+          if (qrDataUrl) {
+            return {
+              success: true,
+              qrCode: qrDataUrl,
+              status: 'QR_READY',
+              message: 'QR Code da Evolution API gerado com sucesso! Aponte o WhatsApp do seu celular.',
+            };
+          }
+        }
+      } catch (directErr) {
+        console.warn('Direct connection notice:', directErr);
+      }
+      return {
+        success: false,
+        qrCode: null,
+        status: 'DISCONNECTED',
+        message: 'Aguardando inicialização da VPS. Clique em "Atualizar QR".',
+      };
+    }
   }
 
   public async resetWhatsAppEvolutionSession(params?: {
@@ -1254,10 +1300,56 @@ class ApiService {
     instanceName?: string;
     apiKey?: string;
   }): Promise<{ success: boolean; qrCode?: string | null; status?: string; message: string }> {
-    return await this.request('/settings/whatsapp/evolution/reset', {
-      method: 'POST',
-      body: JSON.stringify(params || {}),
-    });
+    try {
+      return await this.request('/settings/whatsapp/evolution/reset', {
+        method: 'POST',
+        body: JSON.stringify(params || {}),
+      });
+    } catch (err: any) {
+      console.warn('Backend proxy notice for reset, trying direct connection:', err?.message);
+      const cleanBase = (params?.gatewayUrl || 'http://151.244.40.72:8080').trim().replace(/\/+$/, '');
+      const inst = (params?.instanceName || 'realizze-oficial').trim();
+      const key = (params?.apiKey || 'Realizze@SecretKey2026').trim();
+
+      try {
+        await fetch(`${cleanBase}/instance/delete/${inst}`, {
+          method: 'DELETE',
+          headers: { 'apikey': key, 'Authorization': `Bearer ${key}` },
+        }).catch(() => {});
+
+        const connectRes = await fetch(`${cleanBase}/instance/connect/${inst}`, {
+          headers: { 'apikey': key, 'Authorization': `Bearer ${key}` },
+        });
+        if (connectRes.ok) {
+          const connectData: any = await connectRes.json();
+          let qrDataUrl: string | null = null;
+          if (connectData?.code) {
+            qrDataUrl = await QRCode.toDataURL(connectData.code, {
+              errorCorrectionLevel: 'M',
+              margin: 3,
+              width: 400,
+              color: { dark: '#000000', light: '#ffffff' },
+            });
+          } else if (connectData?.base64) {
+            qrDataUrl = connectData.base64.startsWith('data:') ? connectData.base64 : `data:image/png;base64,${connectData.base64}`;
+          }
+          if (qrDataUrl) {
+            return {
+              success: true,
+              qrCode: qrDataUrl,
+              status: 'QR_READY',
+              message: 'Sessão reiniciada com sucesso! Um novo QR Code limpo foi gerado.',
+            };
+          }
+        }
+      } catch {}
+      return {
+        success: false,
+        qrCode: null,
+        status: 'DISCONNECTED',
+        message: 'Instância reiniciada. Clique em Atualizar QR em alguns instantes.',
+      };
+    }
   }
 
   public async getWhatsAppLiveStatus(): Promise<{ connected: boolean; status: string; phoneConnected?: string | null }> {
