@@ -1127,10 +1127,14 @@ export const WhatsAppConfigView: React.FC = () => {
               <Unlink className="w-6 h-6" />
             </div>
             <h3 className="text-lg font-bold text-slate-900 text-center mb-1">
-              Desconectar Canal de WhatsApp
+              {providerType === 'EVOLUTION_API' || providerType === 'QR_CODE'
+                ? 'Desconectar WhatsApp (Evolution API)'
+                : 'Desconectar Canal de WhatsApp'}
             </h3>
-            <p className="text-xs text-slate-500 text-center mb-6">
-              Tem certeza de que deseja desconectar o canal da Meta Cloud API? O sistema suspenderá o envio de mensagens até que seja reconectado.
+            <p className="text-xs text-slate-500 text-center mb-6 leading-relaxed">
+              {providerType === 'EVOLUTION_API' || providerType === 'QR_CODE'
+                ? 'Tem certeza de que deseja desconectar o aparelho atual? A sessão na VPS será encerrada e um novo QR Code limpo será gerado imediatamente para você conectar o WhatsApp da cliente (+55 81 99535-7254).'
+                : 'Tem certeza de que deseja desconectar o canal da Meta Cloud API? O sistema suspenderá o envio de mensagens até que seja reconectado.'}
             </p>
 
             <div className="flex items-center gap-3">

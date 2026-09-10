@@ -187,7 +187,7 @@ settingsRouter.get('/whatsapp', authenticateToken, requireRole(['ADMIN', 'SUPERV
           verifyToken: parsed.verifyToken || 'viagens_whatsapp_verify_token_2026',
           verifiedName: parsed.verifiedName || null,
           qualityRating: parsed.qualityRating || null,
-          instanceName: parsed.instanceName || process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial',
+          instanceName: (parsed.instanceName && parsed.instanceName !== 'realizze-travel') ? parsed.instanceName : (process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial'),
           gatewayUrl: parsed.gatewayUrl || process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080',
           apiKey: parsed.apiKey || process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026',
           zapiInstanceId: parsed.zapiInstanceId || '',
@@ -693,24 +693,32 @@ settingsRouter.get('/whatsapp/status', flexibleAuth, async (req: AuthenticatedRe
         if (stateRes.ok) {
           const data: any = await stateRes.json();
           const state = data?.instance?.state || data?.state;
-          const isConnected = state === 'open' || state === 'CONNECTED';
+          const isConnected = state === 'open';
           const owner = data?.instance?.owner || data?.owner;
 
-          if (isConnected && creds.status !== 'CONNECTED') {
-            try { WhatsAppService.updateGatewayConnectionStatus(orgId, 'CONNECTED', owner || undefined); } catch {}
+          if (isConnected) {
+            if (creds.status !== 'CONNECTED') {
+              try { WhatsAppService.updateGatewayConnectionStatus(orgId, 'CONNECTED', owner || undefined); } catch {}
+            }
+            res.json({
+              connected: true,
+              status: 'CONNECTED',
+              state: 'open',
+              phoneConnected: owner || creds.phoneConnected || null,
+            });
+            return;
+          } else {
+            if (creds.status === 'CONNECTED' && (state === 'close' || state === 'connecting')) {
+              try { WhatsAppService.updateGatewayConnectionStatus(orgId, 'DISCONNECTED', null); } catch {}
+            }
+            res.json({
+              connected: false,
+              status: creds.qrCodeBase64 ? 'QR_READY' : 'DISCONNECTED',
+              state: state || 'close',
+              phoneConnected: null,
+            });
+            return;
           }
-          // Do not automatically downgrade to DISCONNECTED if user manually confirmed or is in active state
-          // to avoid polling race conditions while pairing
-
-          const effectivelyConnected = isConnected || creds.status === 'CONNECTED';
-
-          res.json({
-            connected: effectivelyConnected,
-            status: effectivelyConnected ? 'CONNECTED' : (creds.qrCodeBase64 ? 'QR_READY' : 'DISCONNECTED'),
-            state: state || (effectivelyConnected ? 'open' : 'close'),
-            phoneConnected: owner || creds.phoneConnected || null,
-          });
-          return;
         }
       } catch (err) {
         // VPS fetch failed or timed out, fallback to DB status smoothly
@@ -847,14 +855,15 @@ settingsRouter.post('/whatsapp/qr/pair-success', flexibleAuth, (req: Authenticat
 });
 
 // POST /api/settings/whatsapp/disconnect - Disconnect WhatsApp
-settingsRouter.post('/whatsapp/disconnect', flexibleAuth, (req: AuthenticatedRequest, res: Response): void => {
+settingsRouter.post('/whatsapp/disconnect', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const orgId = req.user!.organization_id;
-    WhatsAppService.updateGatewayConnectionStatus(orgId, 'DISCONNECTED');
+    const result = await WhatsAppService.disconnectEvolution(orgId);
     res.json({
       success: true,
-      message: 'WhatsApp desconectado com sucesso.',
+      message: result.message,
       status: 'DISCONNECTED',
+      qrCode: result.qrCode || null,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Erro ao desconectar WhatsApp.' });

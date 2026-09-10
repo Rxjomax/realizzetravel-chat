@@ -73,6 +73,8 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
   const [isCountdownPaused, setIsCountdownPaused] = useState(false);
   const [isResettingSession, setIsResettingSession] = useState(false);
   const [isEnlarged, setIsEnlarged] = useState(false);
+  const [isDisconnectModalOpen, setIsDisconnectModalOpen] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
 
   // Pairing Options State (QR Code vs 8-digit Code)
   const [pairingMode, setPairingMode] = useState<'QR_CODE' | 'PAIRING_CODE'>('QR_CODE');
@@ -169,7 +171,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
       if (res.config) {
         const cfg = res.config;
         if (cfg.gatewayUrl) setGatewayUrl(cfg.gatewayUrl);
-        if (cfg.instanceName) setInstanceName(cfg.instanceName);
+        if (cfg.instanceName) setInstanceName(cfg.instanceName === 'realizze-travel' ? 'realizze-oficial' : cfg.instanceName);
         if (cfg.apiKey) setApiKey(cfg.apiKey);
         if (cfg.phoneConnected) setPhoneConnected(cfg.phoneConnected);
         if (cfg.qrCodeBase64) setQrCodeImage(cfg.qrCodeBase64);
@@ -181,9 +183,13 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
       if (liveRes.connected) {
         setConnectionStatus('CONNECTED');
         if (liveRes.phoneConnected) setPhoneConnected(liveRes.phoneConnected);
-      } else if (!qrCodeImage) {
-        // Auto-generate QR code if not connected
-        handleGenerateQr();
+      } else {
+        setConnectionStatus('DISCONNECTED');
+        setPhoneConnected(null);
+        if (!qrCodeImage) {
+          // Auto-generate QR code if not connected
+          handleGenerateQr();
+        }
       }
     } catch (e: any) {
       console.warn('Notice loading Evolution settings:', e.message);
@@ -504,6 +510,40 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
     }
   };
 
+  const handleDisconnect = async () => {
+    try {
+      setIsDisconnecting(true);
+      setFeedbackMessage({
+        type: 'info',
+        text: 'Desconectando aparelho da Evolution API e gerando novo QR Code limpo...',
+      });
+      const res = await api.disconnectWhatsApp();
+      setConnectionStatus('QR_READY');
+      setPhoneConnected(null);
+      setPairingCode(null);
+      setIsDisconnectModalOpen(false);
+
+      if (res.qrCode) {
+        setQrCodeImage(res.qrCode);
+      } else {
+        await handleGenerateQr(false);
+      }
+
+      setFeedbackMessage({
+        type: 'success',
+        text: 'Aparelho anterior desconectado com sucesso! Um novo QR Code limpo foi gerado abaixo para você conectar o WhatsApp da cliente (+55 81 99535-7254).',
+      });
+      startPolling();
+    } catch (err: any) {
+      setFeedbackMessage({
+        type: 'error',
+        text: err.message || 'Erro ao desconectar aparelho.',
+      });
+    } finally {
+      setIsDisconnecting(false);
+    }
+  };
+
   const handleCopy = (text: string, field: string) => {
     navigator.clipboard?.writeText(text);
     setCopiedField(field);
@@ -650,11 +690,12 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
 
             <button
               type="button"
-              onClick={onDisconnectClick}
+              disabled={isDisconnecting}
+              onClick={() => setIsDisconnectModalOpen(true)}
               className="p-3.5 rounded-xl border border-slate-200 hover:border-rose-300 hover:bg-rose-50/40 text-rose-700 text-xs font-bold flex flex-col items-center justify-center gap-1.5 transition-all text-center"
             >
-              <Unlink className="w-5 h-5 text-rose-500" />
-              <span>Desconectar Aparelho</span>
+              <Unlink className={`w-5 h-5 text-rose-500 ${isDisconnecting ? 'animate-spin' : ''}`} />
+              <span>{isDisconnecting ? 'Desconectando...' : 'Desconectar Aparelho'}</span>
               <span className="text-[10px] text-slate-400 font-normal">Encerrar sessão</span>
             </button>
           </div>
@@ -1232,6 +1273,54 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
           </div>
         )}
       </div>
+
+      {/* ========================================================================= */}
+      {/* MODAL: CONFIRMAR DESCONEXÃO DO WHATSAPP (EVOLUTION API)                  */}
+      {/* ========================================================================= */}
+      {isDisconnectModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 p-6">
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-4">
+              <Unlink className="w-6 h-6" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-900 text-center mb-1">
+              Desconectar Aparelho do WhatsApp
+            </h3>
+            <p className="text-xs text-slate-500 text-center mb-6 leading-relaxed">
+              Tem certeza de que deseja desconectar o aparelho atual? A sessão na Evolution API será encerrada e um novo QR Code limpo será gerado imediatamente para você conectar o WhatsApp da cliente (<strong>+55 81 99535-7254</strong>).
+            </p>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                disabled={isDisconnecting}
+                onClick={() => setIsDisconnectModalOpen(false)}
+                className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isDisconnecting}
+                onClick={handleDisconnect}
+                className="flex-1 py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5"
+              >
+                {isDisconnecting ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Desconectando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Unlink className="w-4 h-4" />
+                    <span>Sim, Desconectar</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

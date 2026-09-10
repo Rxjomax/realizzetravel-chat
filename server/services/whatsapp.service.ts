@@ -258,7 +258,7 @@ export class WhatsAppService {
     if ((creds.providerType === 'EVOLUTION_API' || creds.providerType === 'QR_CODE') && creds.gatewayUrl) {
       try {
         const baseUrl = creds.gatewayUrl.replace(/\/+$/, '');
-        const instance = creds.instanceName || 'realizze-travel';
+        const instance = (creds.instanceName && creds.instanceName !== 'realizze-travel') ? creds.instanceName.trim() : (process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial');
         const url = `${baseUrl}/message/sendText/${instance}`;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (creds.apiKey) {
@@ -563,26 +563,32 @@ export class WhatsAppService {
     broadcastEvent('whatsapp:qr', { qrCode: qrCodeBase64, status: 'QR_READY' }, organizationId);
   }
 
-  public static updateGatewayConnectionStatus(organizationId: string, status: string, phone?: string): void {
-    const creds = this.getCredentials(organizationId);
+  public static updateGatewayConnectionStatus(organizationId: string, status: string, phone?: string | null, qrCode?: string | null): void {
+    const targetOrg = this.resolveOrganizationId(organizationId);
+    const creds = this.getCredentials(targetOrg);
     creds.status = status;
-    if (phone) creds.phoneConnected = phone;
+    if (phone !== undefined) creds.phoneConnected = phone;
     if (status === 'CONNECTED') {
       creds.qrCodeBase64 = null;
     }
     if (status === 'DISCONNECTED') {
       creds.phoneConnected = null;
-      creds.qrCodeBase64 = null;
+      if (qrCode !== undefined) {
+        creds.qrCodeBase64 = qrCode;
+      }
+    }
+    if (qrCode) {
+      creds.qrCodeBase64 = qrCode;
     }
 
     dbRun(
       `INSERT INTO settings (id, organization_id, key, value, created_at, updated_at)
        VALUES (?, ?, 'whatsapp_config', ?, datetime('now'), datetime('now'))
        ON CONFLICT(organization_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-      [`set_wa_${organizationId}`, organizationId, JSON.stringify(creds)]
+      [`set_wa_${targetOrg}`, targetOrg, JSON.stringify(creds)]
     );
 
-    broadcastEvent('whatsapp:status', { status, phoneConnected: creds.phoneConnected }, organizationId);
+    broadcastEvent('whatsapp:status', { status, phoneConnected: creds.phoneConnected }, targetOrg);
   }
 
   public static processInboundMessage(params: {
@@ -1101,7 +1107,7 @@ export class WhatsAppService {
     if (!creds.gatewayUrl) return null;
     try {
       const baseUrl = creds.gatewayUrl.trim().replace(/\/+$/, '');
-      const inst = (creds.instanceName || 'realizze-travel').trim();
+      const inst = (creds.instanceName && creds.instanceName !== 'realizze-travel') ? creds.instanceName.trim() : (process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial');
       const url = `${baseUrl}/chat/fetchProfilePictureUrl/${inst}`;
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (creds.apiKey) {
@@ -1119,6 +1125,68 @@ export class WhatsAppService {
       }
     } catch {}
     return null;
+  }
+
+  public static async disconnectEvolution(organizationId = 'org_realizzetravel'): Promise<{ success: boolean; message: string; qrCode?: string | null }> {
+    const creds = this.getCredentials(organizationId);
+    const baseUrl = (creds.gatewayUrl || process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080').trim().replace(/\/+$/, '');
+    const inst = (creds.instanceName && creds.instanceName !== 'realizze-travel') ? creds.instanceName.trim() : (process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial');
+    const key = (creds.apiKey || process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026').trim();
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'apikey': key,
+      'Authorization': `Bearer ${key}`,
+    };
+
+    let freshQr: string | null = null;
+
+    try {
+      // 1. Delete instance from Evolution to wipe Baileys auth tokens completely
+      try {
+        await fetch(`${baseUrl}/instance/logout/${inst}`, { method: 'DELETE', headers });
+      } catch {}
+      try {
+        await fetch(`${baseUrl}/instance/delete/${inst}`, { method: 'DELETE', headers });
+      } catch {}
+
+      // 2. Re-create clean instance
+      try {
+        await fetch(`${baseUrl}/instance/create`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            instanceName: inst,
+            token: key,
+            qrcode: true,
+            integration: 'WHATSAPP-BAILEYS',
+          }),
+        });
+      } catch {}
+
+      // 3. Connect to get fresh QR Code
+      try {
+        const connRes = await fetch(`${baseUrl}/instance/connect/${inst}`, { headers });
+        if (connRes.ok) {
+          const connData: any = await connRes.json();
+          const rawQr = connData.base64 || connData.qrcode?.base64;
+          if (rawQr) {
+            freshQr = rawQr.startsWith('data:') ? rawQr : `data:image/png;base64,${rawQr}`;
+          }
+        }
+      } catch {}
+    } catch (evoErr) {
+      console.warn('Notice during evolution disconnect call:', evoErr);
+    }
+
+    // 4. Update database to DISCONNECTED with cleared phone
+    this.updateGatewayConnectionStatus(organizationId, 'DISCONNECTED', null, freshQr);
+
+    return {
+      success: true,
+      message: 'Aparelho desconectado com sucesso! A sessão foi encerrada e um novo QR Code foi gerado para você conectar o WhatsApp da cliente.',
+      qrCode: freshQr,
+    };
   }
 
   public static async configureEvolutionWebhook(params: {
@@ -1142,16 +1210,18 @@ export class WhatsAppService {
       }
 
       const payload = {
-        enabled: true,
-        url: webhookUrl,
-        webhookByEvents: false,
-        events: [
-          'MESSAGES_UPSERT',
-          'MESSAGES_UPDATE',
-          'CONNECTION_UPDATE',
-          'QRCODE_UPDATED',
-          'SEND_MESSAGE',
-        ],
+        webhook: {
+          enabled: true,
+          url: webhookUrl,
+          webhookByEvents: false,
+          events: [
+            'MESSAGES_UPSERT',
+            'MESSAGES_UPDATE',
+            'CONNECTION_UPDATE',
+            'QRCODE_UPDATED',
+            'SEND_MESSAGE',
+          ],
+        },
       };
 
       const res = await fetch(url, {
@@ -1168,7 +1238,7 @@ export class WhatsAppService {
         };
       }
 
-      return { success: true, message: 'Webhook da Evolution API configurado com sucesso! Eventos vinculados à agência.' };
+      return { success: true, message: 'Webhook da Evolution API ativado com sucesso! As mensagens recebidas serão roteadas ao CRM.' };
     } catch (err: any) {
       return { success: false, message: err.message || 'Falha de rede ao contatar a Evolution API.' };
     }
@@ -1186,7 +1256,7 @@ export class WhatsAppService {
 
     try {
       const baseUrl = creds.gatewayUrl.trim().replace(/\/+$/, '');
-      const inst = (creds.instanceName || 'realizze-travel').trim();
+      const inst = (creds.instanceName && creds.instanceName !== 'realizze-travel') ? creds.instanceName.trim() : (process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial');
       const url = `${baseUrl}/chat/findChats/${inst}`;
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (creds.apiKey) {

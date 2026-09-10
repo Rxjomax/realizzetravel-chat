@@ -1449,7 +1449,7 @@ class ApiService {
     });
   }
 
-  public async disconnectWhatsApp(): Promise<{ success: boolean; message: string }> {
+  public async disconnectWhatsApp(): Promise<{ success: boolean; message: string; qrCode?: string | null; status?: string }> {
     return await this.request('/settings/whatsapp/disconnect', {
       method: 'POST',
     });
