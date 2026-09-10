@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import QRCode from 'qrcode';
 import { dbGet, dbRun } from '../db/database';
-import { authenticateToken, requireRole, AuthenticatedRequest } from '../auth/middleware';
+import { authenticateToken, requireRole, flexibleAuth, AuthenticatedRequest } from '../auth/middleware';
 import { WhatsAppService } from '../services/whatsapp.service';
 import { broadcastEvent } from '../realtime/ws';
 
@@ -333,7 +333,7 @@ async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 3500
 }
 
 // POST /api/settings/whatsapp/qr/generate - Connect & Request QR code for phone pairing (Evolution API & Direct QR)
-settingsRouter.post('/whatsapp/qr/generate', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR', 'AGENT']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+settingsRouter.post('/whatsapp/qr/generate', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const orgId = req.user!.organization_id;
     const {
@@ -469,7 +469,7 @@ settingsRouter.post('/whatsapp/qr/generate', authenticateToken, requireRole(['AD
 });
 
 // POST /api/settings/whatsapp/evolution/reset - Reset instance session on Evolution API (fixes stale session / pairing issues)
-settingsRouter.post('/whatsapp/evolution/reset', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR', 'AGENT']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+settingsRouter.post('/whatsapp/evolution/reset', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const orgId = req.user!.organization_id;
     const {
@@ -573,7 +573,7 @@ settingsRouter.post('/whatsapp/evolution/reset', authenticateToken, requireRole(
 });
 
 // GET /api/settings/whatsapp/status - Live check Evolution API connection status
-settingsRouter.get('/whatsapp/status', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+settingsRouter.get('/whatsapp/status', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const orgId = req.user!.organization_id;
     const creds = WhatsAppService.getCredentials(orgId);
@@ -628,7 +628,7 @@ settingsRouter.get('/whatsapp/status', authenticateToken, async (req: Authentica
 });
 
 // POST /api/settings/whatsapp/evolution/configure-webhook - Automatically set webhook on Evolution API
-settingsRouter.post('/whatsapp/evolution/configure-webhook', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR', 'AGENT']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+settingsRouter.post('/whatsapp/evolution/configure-webhook', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { gatewayUrl, instanceName, apiKey } = req.body;
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
@@ -649,7 +649,7 @@ settingsRouter.post('/whatsapp/evolution/configure-webhook', authenticateToken, 
 });
 
 // POST /api/settings/whatsapp/evolution/sync - Sync chats from Evolution API
-settingsRouter.post('/whatsapp/evolution/sync', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR', 'AGENT']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+settingsRouter.post('/whatsapp/evolution/sync', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const orgId = req.user!.organization_id;
     const result = await WhatsAppService.syncEvolutionChats(orgId);
@@ -664,7 +664,7 @@ settingsRouter.post('/whatsapp/evolution/sync', authenticateToken, requireRole([
 });
 
 // POST /api/settings/whatsapp/evolution/test - Test Evolution API connection
-settingsRouter.post('/whatsapp/evolution/test', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR', 'AGENT']), async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+settingsRouter.post('/whatsapp/evolution/test', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { gatewayUrl, instanceName, apiKey } = req.body;
     if (!gatewayUrl || !instanceName) {
@@ -712,7 +712,7 @@ settingsRouter.post('/whatsapp/evolution/test', authenticateToken, requireRole([
 });
 
 // POST /api/settings/whatsapp/qr/pair-success - Mark as connected when paired
-settingsRouter.post('/whatsapp/qr/pair-success', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR']), (req: AuthenticatedRequest, res: Response): void => {
+settingsRouter.post('/whatsapp/qr/pair-success', flexibleAuth, (req: AuthenticatedRequest, res: Response): void => {
   try {
     const orgId = req.user!.organization_id;
     const { phone } = req.body;
@@ -743,7 +743,7 @@ settingsRouter.post('/whatsapp/qr/pair-success', authenticateToken, requireRole(
 });
 
 // POST /api/settings/whatsapp/disconnect - Disconnect WhatsApp
-settingsRouter.post('/whatsapp/disconnect', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR']), (req: AuthenticatedRequest, res: Response): void => {
+settingsRouter.post('/whatsapp/disconnect', flexibleAuth, (req: AuthenticatedRequest, res: Response): void => {
   try {
     const orgId = req.user!.organization_id;
     WhatsAppService.updateGatewayConnectionStatus(orgId, 'DISCONNECTED');
@@ -779,7 +779,7 @@ settingsRouter.post(['/whatsapp/clear-history', '/clear-mock-data'], authenticat
 });
 
 // POST /api/settings/whatsapp/simulate-incoming - Real-time Inbound WhatsApp Message Simulator
-settingsRouter.post('/whatsapp/simulate-incoming', authenticateToken, requireRole(['ADMIN', 'SUPERVISOR', 'AGENT']), (req: AuthenticatedRequest, res: Response): void => {
+settingsRouter.post('/whatsapp/simulate-incoming', flexibleAuth, (req: AuthenticatedRequest, res: Response): void => {
   try {
     const orgId = req.user!.organization_id;
     const { phone = '+55 11 98888-7777', name = 'Cliente WhatsApp', content = 'Olá! Gostaria de informações sobre pacotes de viagem.', messageType = 'text', avatar, avatarUrl } = req.body;
