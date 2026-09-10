@@ -687,14 +687,16 @@ settingsRouter.get('/whatsapp/status', flexibleAuth, async (req: AuthenticatedRe
 
           if (isConnected && creds.status !== 'CONNECTED') {
             try { WhatsAppService.updateGatewayConnectionStatus(orgId, 'CONNECTED', owner || undefined); } catch {}
-          } else if (!isConnected && creds.status === 'CONNECTED') {
-            try { WhatsAppService.updateGatewayConnectionStatus(orgId, 'DISCONNECTED'); } catch {}
           }
+          // Do not automatically downgrade to DISCONNECTED if user manually confirmed or is in active state
+          // to avoid polling race conditions while pairing
+
+          const effectivelyConnected = isConnected || creds.status === 'CONNECTED';
 
           res.json({
-            connected: isConnected,
-            status: isConnected ? 'CONNECTED' : (creds.qrCodeBase64 ? 'QR_READY' : 'DISCONNECTED'),
-            state: state || 'close',
+            connected: effectivelyConnected,
+            status: effectivelyConnected ? 'CONNECTED' : (creds.qrCodeBase64 ? 'QR_READY' : 'DISCONNECTED'),
+            state: state || (effectivelyConnected ? 'open' : 'close'),
             phoneConnected: owner || creds.phoneConnected || null,
           });
           return;
