@@ -1331,7 +1331,11 @@ export class WhatsAppService {
           if (!remoteJid || remoteJid.includes('@broadcast')) continue;
 
           const isGroup = remoteJid.includes('@g.us');
-          const cleanPhone = String(remoteJid).replace(/@.*$/, '').replace(/\D/g, '');
+          let targetJid = remoteJid;
+          if (item.lastMessage?.key?.remoteJidAlt && item.lastMessage.key.remoteJidAlt.includes('@s.whatsapp.net')) {
+            targetJid = item.lastMessage.key.remoteJidAlt;
+          }
+          const cleanPhone = String(targetJid).replace(/@.*$/, '').replace(/\D/g, '');
           const matchedContact = contactsMap.get(cleanPhone) || contactsMap.get(remoteJid);
           
           // Extract message text first to help with name extraction
@@ -1768,25 +1772,31 @@ export class WhatsAppService {
 
       const jidCandidates = [
         `${clean}@s.whatsapp.net`,
+        clean.length === 11 && clean.startsWith('55') ? `55${clean.slice(2, 4)}9${clean.slice(4)}@s.whatsapp.net` : null,
+        clean.length === 13 && clean.startsWith('55') ? `55${clean.slice(2, 4)}${clean.slice(5)}@s.whatsapp.net` : null,
+        clean.startsWith('55') ? `${clean.slice(2)}@s.whatsapp.net` : null,
         `${clean}@lid`,
-        clean.startsWith('55') ? `${clean.slice(2)}@lid` : null,
       ].filter(Boolean) as string[];
 
       const headers = { 'Content-Type': 'application/json', 'apikey': key };
       const now = new Date().toISOString();
 
-      for (const jid of jidCandidates) {
-        try {
-          const res = await fetchWithTimeout(`${baseUrl}/chat/findMessages/${inst}`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-              where: { key: { remoteJid: jid } },
-              limit: 25,
-            }),
-          }, 3000);
+      const orConditions = jidCandidates.map(j => ([
+        { key: { remoteJid: j } },
+        { key: { remoteJidAlt: j } }
+      ])).flat();
 
-          if (!res.ok) continue;
+      try {
+        const res = await fetchWithTimeout(`${baseUrl}/chat/findMessages/${inst}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            where: { OR: orConditions },
+            limit: 50,
+          }),
+        }, 4000);
+
+        if (res.ok) {
           const data = await res.json().catch(() => ({}));
           const records = data?.messages?.records || (Array.isArray(data) ? data : []);
           if (Array.isArray(records) && records.length > 0) {
@@ -1798,6 +1808,7 @@ export class WhatsAppService {
                 (r.message?.imageMessage ? '[Foto]' : null) ||
                 (r.message?.audioMessage ? '[Áudio]' : null) ||
                 (r.message?.documentMessage ? '[Documento]' : null) ||
+                (r.message?.videoMessage ? '[Vídeo]' : null) ||
                 null;
               const rId = r.key?.id || r.id;
               if (!content || !rId) continue;
@@ -1816,10 +1827,9 @@ export class WhatsAppService {
                 );
               }
             }
-            break; // Found messages for this candidate JID
           }
-        } catch {}
-      }
+        }
+      } catch {}
     } catch (e) {
       console.warn('Could not auto-fetch customer messages from Evolution API:', e);
     }

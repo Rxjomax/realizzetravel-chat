@@ -222,7 +222,7 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
     )?.count || 0;
 
     if (totalConvCount === 0) {
-      await WhatsAppService.syncZapiRecentChats(orgId).catch(() => {});
+      await WhatsAppService.syncEvolutionChats(orgId).catch(() => {});
     }
 
     // Regra de Negócio: Se o atendente não interagir no chat em 1 dia (24h), o cliente volta para aguardando
