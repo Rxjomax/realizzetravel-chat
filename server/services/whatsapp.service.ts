@@ -1,4 +1,4 @@
-import { dbGet, dbQuery, dbRun, dbTransaction } from '../db/database';
+import { dbGet, dbQuery, dbRun, dbTransaction, getDatabase } from '../db/database';
 import { broadcastEvent } from '../realtime/ws';
 
 async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 8000): Promise<Response> {
@@ -231,11 +231,12 @@ export class WhatsAppService {
     const creds = this.getCredentials(organizationId);
     let cleanPhone = to.trim();
 
-    // If recipient is a conversation ID, customer ID, or Prisma CUID (cmtw...), resolve real customer phone/JID from DB
+    // If recipient is a conversation ID, customer ID, Prisma CUID (cmtw...), or contains @lid, resolve real customer phone/JID from DB
     if (
       cleanPhone.startsWith('cnv_') ||
       cleanPhone.startsWith('cst_') ||
       cleanPhone.startsWith('cmtw') ||
+      cleanPhone.includes('@lid') ||
       (!cleanPhone.includes('@') && cleanPhone.replace(/\D/g, '').length < 8)
     ) {
       try {
@@ -243,18 +244,24 @@ export class WhatsAppService {
           `SELECT c.whatsapp_jid, cust.phone, cust.whatsapp_jid as cust_jid 
            FROM conversations c 
            LEFT JOIN customers cust ON c.customer_id = cust.id 
-           WHERE c.id = ? OR c.customer_id = ? OR c.whatsapp_jid = ? LIMIT 1`,
-          [cleanPhone, cleanPhone, cleanPhone]
+           WHERE c.id = ? OR c.customer_id = ? OR c.whatsapp_jid = ? OR cust.phone LIKE ? LIMIT 1`,
+          [cleanPhone, cleanPhone, cleanPhone, `%${cleanPhone.replace(/\D/g, '')}%`]
         );
         if (conv) {
-          const realJid = conv.cust_jid && !conv.cust_jid.startsWith('cmtw') ? conv.cust_jid : conv.whatsapp_jid;
-          if (realJid && !realJid.startsWith('cmtw') && (realJid.includes('@') || realJid.replace(/\D/g, '').length >= 8)) {
-            cleanPhone = realJid;
-          } else if (conv.phone) {
+          if (conv.phone) {
             cleanPhone = conv.phone;
+          } else {
+            const realJid = conv.cust_jid && !conv.cust_jid.startsWith('cmtw') && !conv.cust_jid.includes('@lid') ? conv.cust_jid : conv.whatsapp_jid;
+            if (realJid && !realJid.startsWith('cmtw') && !realJid.includes('@lid') && (realJid.includes('@') || realJid.replace(/\D/g, '').length >= 8)) {
+              cleanPhone = realJid;
+            }
           }
         }
       } catch {}
+    }
+
+    if (cleanPhone.includes('@lid')) {
+      cleanPhone = cleanPhone.replace(/@lid$/, '').replace(/\D/g, '');
     }
 
     if (!cleanPhone.includes('@')) {

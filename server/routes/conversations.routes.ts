@@ -3,6 +3,7 @@ import { dbGet, dbQuery, dbRun, dbTransaction } from '../db/database';
 import { authenticateToken, AuthenticatedRequest } from '../auth/middleware';
 import { broadcastEvent } from '../realtime/ws';
 import { WhatsAppService } from '../services/whatsapp.service';
+import { SNAPSHOT_CONVERSATIONS } from '../../src/services/whatsappSnapshotData';
 
 export const conversationsRouter = Router();
 
@@ -361,8 +362,9 @@ conversationsRouter.get('/:id', authenticateToken, async (req: AuthenticatedRequ
   try {
     const orgId = req.user!.organization_id;
     const convId = req.params.id;
+    const cleanDigits = convId.replace(/\D/g, '');
 
-    const conv = dbGet<any>(
+    let conv = dbGet<any>(
       `SELECT
         c.id, c.organization_id, c.customer_id, c.assigned_user_id, c.whatsapp_jid, c.status, c.priority,
         c.created_at, c.updated_at, c.closed_at, c.closed_by_user_id, c.last_message_at,
@@ -374,9 +376,43 @@ conversationsRouter.get('/:id', authenticateToken, async (req: AuthenticatedRequ
       FROM conversations c
       JOIN customers cust ON cust.id = c.customer_id
       LEFT JOIN users u ON u.id = c.assigned_user_id
-      WHERE c.id = ? AND (c.organization_id = ? OR c.organization_id = 'org_realizzetravel' OR c.organization_id = 'org_voolivre')`,
-      [convId, orgId]
+      WHERE (c.id = ? OR c.customer_id = ? OR c.whatsapp_jid = ? OR cust.phone = ? OR (length(?) >= 8 AND cust.phone LIKE ?))
+        AND (c.organization_id = ? OR c.organization_id = 'org_realizzetravel' OR c.organization_id = 'org_voolivre')
+      ORDER BY c.updated_at DESC LIMIT 1`,
+      [convId, convId, convId, convId, cleanDigits, `%${cleanDigits}%`, orgId]
     );
+
+    if (!conv) {
+      const snap = SNAPSHOT_CONVERSATIONS.find((s: any) => s.id === convId || s.customer_id === convId || s.customer?.id === convId || (cleanDigits.length >= 8 && s.customer?.phone?.replace(/\D/g, '').includes(cleanDigits)));
+      if (snap) {
+        const phone = snap.customer?.phone || `+${cleanDigits}`;
+        const name = snap.customer?.name || 'Cliente WhatsApp';
+        const resObj = WhatsAppService.processInboundMessage({
+          organizationId: orgId,
+          phone,
+          name,
+          content: snap.last_message?.content || 'Conversa sincronizada',
+          messageType: 'text',
+          whatsappMessageId: snap.last_message?.id,
+          senderType: 'CUSTOMER',
+        });
+        conv = dbGet<any>(
+          `SELECT
+            c.id, c.organization_id, c.customer_id, c.assigned_user_id, c.whatsapp_jid, c.status, c.priority,
+            c.created_at, c.updated_at, c.closed_at, c.closed_by_user_id, c.last_message_at,
+            c.reminder_date, c.reminder_note, c.reminder_status,
+            cust.name as customer_name, cust.phone as customer_phone, cust.email as customer_email,
+            cust.whatsapp_jid as customer_whatsapp_jid,
+            cust.destination_interest, cust.travel_date, cust.passenger_count, cust.budget, cust.notes as customer_notes, cust.avatar as customer_avatar,
+            u.name as assigned_user_name, u.email as assigned_user_email, u.avatar as assigned_user_avatar
+          FROM conversations c
+          JOIN customers cust ON cust.id = c.customer_id
+          LEFT JOIN users u ON u.id = c.assigned_user_id
+          WHERE c.id = ? LIMIT 1`,
+          [resObj.conversationId]
+        );
+      }
+    }
 
     if (!conv) {
       res.status(404).json({ error: 'Conversa não encontrada.' });

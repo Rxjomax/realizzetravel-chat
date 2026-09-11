@@ -369,7 +369,7 @@ class ApiService {
       if (filter) params.append('filter', filter);
       if (search) params.append('search', search);
       const data = await this.request<{ conversations: Conversation[] }>(`/conversations?${params.toString()}`);
-      if (data && Array.isArray(data.conversations) && data.conversations.length > 0) {
+      if (data && Array.isArray(data.conversations)) {
         this.localConversations = data.conversations;
         saveStoredConversations(data.conversations);
         return data;
@@ -424,6 +424,10 @@ class ApiService {
         notes: any[];
       }>(`/conversations/${id}`);
       if (data && data.conversation) {
+        if (Array.isArray(data.messages)) {
+          this.localMessages[id] = data.messages;
+          this.saveLocalStorageState();
+        }
         return data;
       }
     } catch (err) {
@@ -507,26 +511,24 @@ class ApiService {
     const conv = this.localConversations.find(c => c.id === conversationId);
     const targetPhone = conv?.customer?.phone?.replace(/\D/g, '');
 
-    // Attempt live Z-API direct send
-    if (!this.isFallbackMode) {
-      try {
-        const result = await this.request<{ message: Message }>(`/conversations/${conversationId}/messages`, {
-          method: 'POST',
-          body: JSON.stringify({ content, messageType, mediaUrl }),
-        });
-        if (result?.message) {
-          if (!this.localMessages[conversationId]) {
-            this.localMessages[conversationId] = [];
-          }
-          if (!this.localMessages[conversationId].some(m => m.id === result.message.id)) {
-            this.localMessages[conversationId].push(result.message);
-          }
-          this.saveLocalStorageState();
-          return result;
+    // Always send POST request to backend API first
+    try {
+      const result = await this.request<{ message: Message }>(`/conversations/${conversationId}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ content, messageType, mediaUrl }),
+      });
+      if (result?.message) {
+        if (!this.localMessages[conversationId]) {
+          this.localMessages[conversationId] = [];
         }
-      } catch (err) {
-        console.warn('Backend send message failed, falling back to local store:', err);
+        if (!this.localMessages[conversationId].some(m => m.id === result.message.id)) {
+          this.localMessages[conversationId].push(result.message);
+        }
+        this.saveLocalStorageState();
+        return result;
       }
+    } catch (err) {
+      console.warn('Backend send message failed, falling back to local store:', err);
     }
 
     const newMsg: Message = {

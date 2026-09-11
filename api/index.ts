@@ -498,11 +498,13 @@ export default async function handler(req: any, res: any) {
       );
       if (conv) {
         actualConvId = conv.id;
-        const jid = conv.cust_jid || conv.whatsapp_jid;
-        if (jid && !jid.startsWith('cmtw') && (jid.includes('@') || jid.replace(/\D/g, '').length >= 8)) {
-          targetRecipient = jid;
-        } else if (conv.phone) {
+        if (conv.phone) {
           targetRecipient = conv.phone;
+        } else {
+          const jid = conv.cust_jid || conv.whatsapp_jid;
+          if (jid && !jid.startsWith('cmtw') && !jid.includes('@lid') && (jid.includes('@') || jid.replace(/\D/g, '').length >= 8)) {
+            targetRecipient = jid;
+          }
         }
       }
     } catch {}
@@ -511,12 +513,12 @@ export default async function handler(req: any, res: any) {
       const snapConv = SNAPSHOT_CONVERSATIONS.find((c: any) => c.id === convId || c.customer?.id === convId || c.whatsapp_jid === convId);
       if (snapConv) {
         actualConvId = snapConv.id;
-        targetRecipient = snapConv.whatsapp_jid || snapConv.customer?.phone;
+        targetRecipient = snapConv.customer?.phone || (snapConv.whatsapp_jid && !snapConv.whatsapp_jid.includes('@lid') ? snapConv.whatsapp_jid : null);
       }
     }
 
     if (!targetRecipient && (convId.includes('@') || convId.replace(/\D/g, '').length >= 8)) {
-      targetRecipient = convId;
+      targetRecipient = convId.replace(/@lid$/, '');
     }
 
     // Send to Evolution API on VPS
