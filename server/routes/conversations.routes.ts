@@ -242,6 +242,13 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
 
     if (realWhatsappCount < 10) {
       await WhatsAppService.syncEvolutionChats(orgId).catch(() => {});
+    } else {
+      // Poll recent Evolution API messages (throttled to max once every 2.5s) for instant real-time sync
+      const lastPollTimestamp = (global as any).__last_evolution_poll_time || 0;
+      if (Date.now() - lastPollTimestamp > 2500) {
+        (global as any).__last_evolution_poll_time = Date.now();
+        await WhatsAppService.pollRecentEvolutionMessages(orgId).catch(() => {});
+      }
     }
 
     let sql = `
@@ -376,7 +383,21 @@ conversationsRouter.get('/:id', authenticateToken, async (req: AuthenticatedRequ
       return;
     }
 
-    // Query local messages immediately for instant response
+    const targetJid = conv.whatsapp_jid || conv.customer_whatsapp_jid || conv.customer_phone;
+
+    // Fetch latest messages from Evolution API for this active conversation
+    if (targetJid) {
+      try {
+        await WhatsAppService.fetchCustomerMessagesFromEvolution(
+          targetJid,
+          convId,
+          conv.customer_id,
+          orgId
+        );
+      } catch {}
+    }
+
+    // Query messages to include any freshly fetched messages
     const messages = dbQuery<any>(
       `SELECT DISTINCT m.*, u.name as sender_name, u.avatar as sender_avatar
        FROM messages m
@@ -386,34 +407,6 @@ conversationsRouter.get('/:id', authenticateToken, async (req: AuthenticatedRequ
        ORDER BY m.created_at ASC`,
       [convId, conv.customer_id]
     );
-
-    const targetJid = conv.whatsapp_jid || conv.customer_whatsapp_jid || (conv.customer_phone?.includes('@') ? conv.customer_phone : null);
-
-    // If few messages exist in local DB, fetch from Evolution API asynchronously in background without blocking response
-    if (messages.length <= 1 && (targetJid || conv.customer_phone)) {
-      WhatsAppService.fetchCustomerMessagesFromEvolution(
-        targetJid || conv.customer_phone,
-        convId,
-        conv.customer_id,
-        orgId
-      ).then(() => {
-        const fresh = dbQuery<any>(
-          `SELECT DISTINCT m.*, u.name as sender_name, u.avatar as sender_avatar
-           FROM messages m
-           LEFT JOIN users u ON u.id = m.sender_id
-           WHERE m.conversation_id = ?
-              OR (m.conversation_id IN (SELECT id FROM conversations WHERE customer_id = ?))
-           ORDER BY m.created_at ASC`,
-          [convId, conv.customer_id]
-        );
-        if (fresh.length > messages.length) {
-          broadcastEvent('conversation:messages_updated', {
-            conversationId: convId,
-            messages: fresh,
-          }, orgId);
-        }
-      }).catch(() => {});
-    }
 
     const events = dbQuery<any>(
       `SELECT e.*, u.name as user_name

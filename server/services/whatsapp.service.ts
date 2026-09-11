@@ -222,6 +222,33 @@ export class WhatsAppService {
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const creds = this.getCredentials(organizationId);
     let cleanPhone = to.trim();
+
+    // If recipient is a conversation ID, customer ID, or Prisma CUID (cmtw...), resolve real customer phone/JID from DB
+    if (
+      cleanPhone.startsWith('cnv_') ||
+      cleanPhone.startsWith('cst_') ||
+      cleanPhone.startsWith('cmtw') ||
+      (!cleanPhone.includes('@') && cleanPhone.replace(/\D/g, '').length < 8)
+    ) {
+      try {
+        const conv = dbGet<any>(
+          `SELECT c.whatsapp_jid, cust.phone, cust.whatsapp_jid as cust_jid 
+           FROM conversations c 
+           LEFT JOIN customers cust ON c.customer_id = cust.id 
+           WHERE c.id = ? OR c.customer_id = ? OR c.whatsapp_jid = ? LIMIT 1`,
+          [cleanPhone, cleanPhone, cleanPhone]
+        );
+        if (conv) {
+          const realJid = conv.cust_jid && !conv.cust_jid.startsWith('cmtw') ? conv.cust_jid : conv.whatsapp_jid;
+          if (realJid && !realJid.startsWith('cmtw') && (realJid.includes('@') || realJid.replace(/\D/g, '').length >= 8)) {
+            cleanPhone = realJid;
+          } else if (conv.phone) {
+            cleanPhone = conv.phone;
+          }
+        }
+      } catch {}
+    }
+
     if (!cleanPhone.includes('@')) {
       cleanPhone = cleanPhone.replace(/\D/g, '');
       if (cleanPhone.startsWith('0')) {
@@ -317,11 +344,12 @@ export class WhatsAppService {
           headers['Authorization'] = `Bearer ${creds.apiKey}`;
         }
 
+        const evoNumber = cleanPhone.includes('@') ? cleanPhone : cleanPhone.replace(/\D/g, '');
         const response = await fetch(url, {
           method: 'POST',
           headers,
           body: JSON.stringify({
-            number: cleanPhone,
+            number: evoNumber,
             text,
             textMessage: { text },
             options: {
@@ -487,13 +515,30 @@ export class WhatsAppService {
         continue;
       }
 
-      const cleanPhone = String(remoteJid).replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
+      const remoteJidAlt = key.remoteJidAlt || item.remoteJidAlt || item.participantAlt || '';
+      let targetJid = remoteJid;
+      if (remoteJidAlt && remoteJidAlt.includes('@s.whatsapp.net')) {
+        targetJid = remoteJidAlt;
+      }
+
+      let cleanPhone = '';
+      if (targetJid.includes('@s.whatsapp.net')) {
+        cleanPhone = targetJid.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+      } else if (VERIFIED_LID_PROFILES[remoteJid]?.name && VERIFIED_LID_PROFILES[remoteJid]?.name.includes('+')) {
+        const phoneMatch = VERIFIED_LID_PROFILES[remoteJid].name.match(/\+?\d+/);
+        if (phoneMatch) cleanPhone = phoneMatch[0].replace(/\D/g, '');
+      }
+      if (!cleanPhone) {
+        cleanPhone = String(targetJid).replace(/@.*$/, '').replace(/\D/g, '');
+      }
+
       if (cleanPhone && cleanPhone.length >= 6) {
         const pushName = isFromMe
           ? (item.senderName || 'Atendente (WhatsApp)')
           : (item.senderName ||
              item.pushName ||
              item.chatName ||
+             VERIFIED_LID_PROFILES[remoteJid]?.name ||
              `Cliente WhatsApp (${cleanPhone.slice(-4)})`);
 
         const msgType = (item.image || item.message?.imageMessage)
@@ -517,6 +562,8 @@ export class WhatsAppService {
           mediaUrl,
           whatsappMessageId: msgId,
           senderType: isFromMe ? 'AGENT' : 'CUSTOMER',
+          whatsappJid: remoteJid,
+          targetJid,
         });
       }
     }
@@ -575,8 +622,10 @@ export class WhatsAppService {
     whatsappMessageId?: string;
     senderType?: 'CUSTOMER' | 'AGENT' | 'SYSTEM';
     avatarUrl?: string | null;
+    whatsappJid?: string;
+    targetJid?: string;
   }): { conversationId: string; status: string; assignedUserId: string | null; autoReplySent?: string } {
-    const { phone, name, content, messageType, mediaUrl, whatsappMessageId, avatarUrl } = params;
+    const { phone, name, content, messageType, mediaUrl, whatsappMessageId, avatarUrl, whatsappJid, targetJid } = params;
     const senderType = params.senderType || 'CUSTOMER';
     const organizationId = this.resolveOrganizationId(params.organizationId);
     const now = new Date().toISOString();
@@ -593,28 +642,31 @@ export class WhatsAppService {
     dbTransaction(() => {
       // 1. Locate or create customer with robust phone matching
       const digitsOnly = phone.replace(/\D/g, '');
+      const waJid = targetJid || whatsappJid || `+${digitsOnly}`;
       let customer = dbGet<any>(
         `SELECT * FROM customers 
          WHERE organization_id = ? 
            AND (
-             phone = ? 
+             whatsapp_jid = ?
+             OR whatsapp_jid = ?
+             OR phone = ? 
              OR phone = ? 
              OR REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '') = ?
              OR REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '') LIKE ?
            )
          LIMIT 1`,
-        [organizationId, phone, `+${digitsOnly}`, digitsOnly, `%${digitsOnly.slice(-8)}`]
+        [organizationId, whatsappJid || '', targetJid || '', phone, `+${digitsOnly}`, digitsOnly, `%${digitsOnly.slice(-8)}`]
       );
 
       if (!customer) {
         const newCustomerId = `cst_${Date.now()}_${Math.random().toString(36).substring(7)}`;
         const initialAvatar = avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=0D9488&color=fff&size=128`;
         dbRun(
-          `INSERT INTO customers (id, organization_id, name, phone, avatar, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [newCustomerId, organizationId, name, `+${digitsOnly}`, initialAvatar, now, now]
+          `INSERT INTO customers (id, organization_id, name, phone, avatar, whatsapp_jid, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [newCustomerId, organizationId, name, `+${digitsOnly}`, initialAvatar, waJid, now, now]
         );
-        customer = { id: newCustomerId, name, phone: `+${digitsOnly}`, avatar: initialAvatar };
+        customer = { id: newCustomerId, name, phone: `+${digitsOnly}`, avatar: initialAvatar, whatsapp_jid: waJid };
       } else {
         // If customer exists with a generic name/number, update to new real name from Meta profile
         const isGenericName = !customer.name || customer.name.startsWith('Cliente WhatsApp') || customer.name.startsWith('+');
@@ -622,16 +674,16 @@ export class WhatsAppService {
         const chosenAvatar = avatarUrl || customer.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=0D9488&color=fff&size=128`;
 
         if (isGenericName && hasNewRealName) {
-          dbRun('UPDATE customers SET name = ?, avatar = ?, updated_at = ? WHERE id = ?', [name, chosenAvatar, now, customer.id]);
+          dbRun('UPDATE customers SET name = ?, avatar = ?, whatsapp_jid = ?, updated_at = ? WHERE id = ?', [name, chosenAvatar, waJid, now, customer.id]);
           customer.name = name;
           customer.avatar = chosenAvatar;
+          customer.whatsapp_jid = waJid;
         } else if (avatarUrl && avatarUrl !== customer.avatar) {
           dbRun('UPDATE customers SET avatar = ?, updated_at = ? WHERE id = ?', [avatarUrl, now, customer.id]);
           customer.avatar = avatarUrl;
-        } else if (!customer.avatar) {
-          const defaultAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(customer.name || name)}&background=0D9488&color=fff&size=128`;
-          dbRun('UPDATE customers SET avatar = ?, updated_at = ? WHERE id = ?', [defaultAvatar, now, customer.id]);
-          customer.avatar = defaultAvatar;
+        } else if (!customer.whatsapp_jid || customer.whatsapp_jid.startsWith('cmtw')) {
+          dbRun('UPDATE customers SET whatsapp_jid = ? WHERE id = ?', [waJid, customer.id]);
+          customer.whatsapp_jid = waJid;
         }
       }
       customerObj = customer;
@@ -667,15 +719,16 @@ export class WhatsAppService {
         }
 
         dbRun(
-          `INSERT INTO conversations (id, organization_id, customer_id, assigned_user_id, status, priority, created_at, updated_at, last_message_at)
-           VALUES (?, ?, ?, ?, ?, 'MEDIUM', ?, ?, ?)`,
-          [newConvId, organizationId, customer.id, assignedUserId, convStatus, now, now, now]
+          `INSERT INTO conversations (id, organization_id, customer_id, whatsapp_jid, assigned_user_id, status, priority, created_at, updated_at, last_message_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'MEDIUM', ?, ?, ?)`,
+          [newConvId, organizationId, customer.id, waJid, assignedUserId, convStatus, now, now, now]
         );
 
         conversation = {
           id: newConvId,
           organization_id: organizationId,
           customer_id: customer.id,
+          whatsapp_jid: waJid,
           assigned_user_id: assignedUserId,
           status: convStatus,
           priority: 'MEDIUM',

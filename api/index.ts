@@ -434,11 +434,16 @@ export default async function handler(req: any, res: any) {
     let targetRecipient: string | null = null;
     try {
       const conv = dbGet<any>(
-        'SELECT c.id, c.customer_id, c.assigned_user_id, c.whatsapp_jid, cust.phone FROM conversations c LEFT JOIN customers cust ON c.customer_id = cust.id WHERE c.id = ?',
+        'SELECT c.id, c.customer_id, c.assigned_user_id, c.whatsapp_jid, cust.phone, cust.whatsapp_jid as cust_jid FROM conversations c LEFT JOIN customers cust ON c.customer_id = cust.id WHERE c.id = ?',
         [convId]
       );
       if (conv) {
-        targetRecipient = conv.whatsapp_jid || conv.phone;
+        const jid = conv.cust_jid || conv.whatsapp_jid;
+        if (jid && !jid.startsWith('cmtw') && (jid.includes('@') || jid.replace(/\D/g, '').length >= 8)) {
+          targetRecipient = jid;
+        } else if (conv.phone) {
+          targetRecipient = conv.phone;
+        }
       }
     } catch {}
 
