@@ -430,14 +430,20 @@ export default async function handler(req: any, res: any) {
     const now = new Date().toISOString();
     const msgId = `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
-    // Try finding conversation in DB or Snapshot
+    // Try finding conversation in DB, Snapshot, or parameter fallback
     let targetRecipient: string | null = null;
+    let actualConvId = convId;
+
     try {
       const conv = dbGet<any>(
-        'SELECT c.id, c.customer_id, c.assigned_user_id, c.whatsapp_jid, cust.phone, cust.whatsapp_jid as cust_jid FROM conversations c LEFT JOIN customers cust ON c.customer_id = cust.id WHERE c.id = ?',
-        [convId]
+        `SELECT c.id, c.customer_id, c.assigned_user_id, c.whatsapp_jid, cust.phone, cust.whatsapp_jid as cust_jid 
+         FROM conversations c 
+         LEFT JOIN customers cust ON c.customer_id = cust.id 
+         WHERE c.id = ? OR c.customer_id = ? OR c.whatsapp_jid = ? LIMIT 1`,
+        [convId, convId, convId]
       );
       if (conv) {
+        actualConvId = conv.id;
         const jid = conv.cust_jid || conv.whatsapp_jid;
         if (jid && !jid.startsWith('cmtw') && (jid.includes('@') || jid.replace(/\D/g, '').length >= 8)) {
           targetRecipient = jid;
@@ -448,33 +454,44 @@ export default async function handler(req: any, res: any) {
     } catch {}
 
     if (!targetRecipient) {
-      const snapConv = SNAPSHOT_CONVERSATIONS.find((c: any) => c.id === convId);
+      const snapConv = SNAPSHOT_CONVERSATIONS.find((c: any) => c.id === convId || c.customer?.id === convId || c.whatsapp_jid === convId);
       if (snapConv) {
+        actualConvId = snapConv.id;
         targetRecipient = snapConv.whatsapp_jid || snapConv.customer?.phone;
+      }
+    }
+
+    if (!targetRecipient && (convId.includes('@') || convId.replace(/\D/g, '').length >= 8)) {
+      targetRecipient = convId;
+    }
+
+    // Send to Evolution API on VPS
+    let waMsgId: string | null = null;
+    let sendStatus = 'sent';
+    if (targetRecipient) {
+      try {
+        const sendRes = await WhatsAppService.sendTextMessage(targetRecipient, content, 'org_realizzetravel');
+        if (sendRes.messageId) {
+          waMsgId = sendRes.messageId;
+          sendStatus = 'delivered';
+        }
+      } catch (evoErr) {
+        console.warn('Notice sending via Evolution API:', evoErr);
       }
     }
 
     // Insert into DB if ready
     try {
       dbRun(
-        `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, media_url, status, created_at)
-         VALUES (?, ?, ?, 'AGENT', 'usr_admin', ?, ?, ?, 'sent', ?)`,
-        [msgId, 'org_realizzetravel', convId, messageType, content, mediaUrl, now]
+        `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, media_url, whatsapp_message_id, status, created_at)
+         VALUES (?, ?, ?, 'AGENT', 'usr_admin', ?, ?, ?, ?, ?, ?)`,
+        [msgId, 'org_realizzetravel', actualConvId, messageType, content, mediaUrl, waMsgId, sendStatus, now]
       );
       dbRun(
         `UPDATE conversations SET last_message_at = ?, updated_at = ? WHERE id = ?`,
-        [now, now, convId]
+        [now, now, actualConvId]
       );
     } catch {}
-
-    // Send to Evolution API on VPS
-    if (targetRecipient) {
-      try {
-        await WhatsAppService.sendTextMessage(targetRecipient, content, 'org_realizzetravel');
-      } catch (evoErr) {
-        console.warn('Notice sending via Evolution API:', evoErr);
-      }
-    }
 
     const createdMessage = {
       id: msgId,

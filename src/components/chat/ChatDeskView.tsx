@@ -203,17 +203,18 @@ export const ChatDeskView: React.FC = () => {
       }
       const uniqueMsgs: Message[] = [];
       for (const m of msgsList) {
+        if (!m) continue;
         const msgKey = m.id || `temp_${Math.random()}`;
         if (seenMsgIds.has(msgKey)) continue;
         seenMsgIds.add(msgKey);
 
-        const isEcho = uniqueMsgs.some(
+        // Only discard if whatsapp_message_id is identical or if message id matches
+        const isDuplicate = uniqueMsgs.some(
           (prev) =>
-            prev.sender_type === m.sender_type &&
-            prev.content?.trim() === m.content?.trim() &&
-            Math.abs(new Date(prev.created_at).getTime() - new Date(m.created_at).getTime()) < 60000
+            (prev.whatsapp_message_id && m.whatsapp_message_id && prev.whatsapp_message_id === m.whatsapp_message_id) ||
+            (prev.id && m.id && prev.id === m.id)
         );
-        if (isEcho) continue;
+        if (isDuplicate) continue;
 
         uniqueMsgs.push(m);
       }
