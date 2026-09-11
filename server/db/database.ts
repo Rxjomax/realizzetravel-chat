@@ -55,9 +55,14 @@ export async function getDatabase(): Promise<SqlJsDatabase> {
   }
 
   if (schemaSql) {
-    dbInstance.run(schemaSql);
     try {
       dbInstance.run('ALTER TABLE customers ADD COLUMN avatar TEXT;');
+    } catch {}
+    try {
+      dbInstance.run('ALTER TABLE customers ADD COLUMN whatsapp_jid TEXT;');
+    } catch {}
+    try {
+      dbInstance.run('ALTER TABLE conversations ADD COLUMN whatsapp_jid TEXT;');
     } catch {}
     try {
       dbInstance.run('ALTER TABLE conversations ADD COLUMN reminder_date TEXT;');
@@ -68,6 +73,12 @@ export async function getDatabase(): Promise<SqlJsDatabase> {
     try {
       dbInstance.run("ALTER TABLE conversations ADD COLUMN reminder_status TEXT DEFAULT 'PENDING';");
     } catch {}
+
+    try {
+      dbInstance.run(schemaSql);
+    } catch (sqlErr) {
+      console.warn('Notice running schemaSql:', sqlErr);
+    }
     try {
       dbInstance.run(`
         CREATE TABLE IF NOT EXISTS whatsapp_groups (

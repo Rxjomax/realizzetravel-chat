@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { dbGet, dbQuery, dbRun, dbTransaction } from './database';
+import { WhatsAppService } from '../services/whatsapp.service';
 
 export async function seedDatabase(): Promise<void> {
   // 0. Auto-migrate existing DB records if any mention VooLivre or legacy domain
@@ -13,6 +14,17 @@ export async function seedDatabase(): Promise<void> {
     dbRun("UPDATE messages SET organization_id = 'org_realizzetravel', content = REPLACE(REPLACE(content, 'VooLivre', 'RealizzeTravel'), 'RealizzeTravel Viagens', 'RealizzeTravel')");
     dbRun("UPDATE settings SET value = REPLACE(REPLACE(REPLACE(value, 'VooLivre', 'RealizzeTravel'), '@voolivre', '@realizzetravel'), 'RealizzeTravel Viagens & Turismo', 'RealizzeTravel')");
     dbRun("UPDATE audit_logs SET organization_id = 'org_realizzetravel', metadata = REPLACE(REPLACE(metadata, 'VooLivre', 'RealizzeTravel'), 'RealizzeTravel Viagens', 'RealizzeTravel')");
+
+    // Clean up empty fake conversations from previous runs
+    try {
+      dbRun(
+        `DELETE FROM conversations 
+         WHERE (organization_id = 'org_realizzetravel' OR organization_id = 'org_voolivre')
+           AND (whatsapp_jid IS NULL OR whatsapp_jid = '')
+           AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = conversations.id)
+           AND id NOT IN ('conv_camila', 'conv_juliana', 'conv_matheus', 'conv_rodrigo')`
+      );
+    } catch {}
 
     // Standardize user roles and labels: Admin, Supervisor, and Consultores 1 to 6
     dbRun("UPDATE users SET name = 'Carlos Santos (Administrador)', email = 'admin@realizzetravel.com.br' WHERE id = 'usr_admin'");
@@ -441,4 +453,11 @@ export async function seedDatabase(): Promise<void> {
   });
 
   console.log('✅ Initial database seeded cleanly with staff users, seed conversations, and agency configuration.');
+
+  // Trigger sync of real WhatsApp chats and messages in background
+  setTimeout(() => {
+    WhatsAppService.syncEvolutionChats(orgId).catch((err) => {
+      console.warn('Background WhatsApp sync error during seed:', err);
+    });
+  }, 500);
 }

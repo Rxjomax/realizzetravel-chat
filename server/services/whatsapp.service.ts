@@ -1330,9 +1330,27 @@ export class WhatsAppService {
           }
         }
 
-        // 3. Process Active Chats
+        // 3. Process Active Chats with Real Messages and Accurate Name Resolution
         if (Array.isArray(chatsList) && chatsList.length > 0) {
-          for (const item of chatsList) {
+          const sortedChats = chatsList.filter(c => c.id || c.remoteJid).sort((a, b) => {
+            const tA = Number(a.lastMessage?.messageTimestamp || a.conversationTimestamp || 0);
+            const tB = Number(b.lastMessage?.messageTimestamp || b.conversationTimestamp || 0);
+            return tB - tA;
+          });
+
+          const curJoaoCount = dbGet<{ cnt: number }>(
+            "SELECT COUNT(*) as cnt FROM conversations WHERE (organization_id = ? OR organization_id = 'org_realizzetravel') AND assigned_user_id = 'usr_joao' AND status = 'OPEN'",
+            [organizationId]
+          )?.cnt || 0;
+          const curMariaCount = dbGet<{ cnt: number }>(
+            "SELECT COUNT(*) as cnt FROM conversations WHERE (organization_id = ? OR organization_id = 'org_realizzetravel') AND assigned_user_id = 'usr_maria' AND status = 'OPEN'",
+            [organizationId]
+          )?.cnt || 0;
+
+          let directChatsAssignedJoao = curJoaoCount;
+          let directChatsAssignedMaria = curMariaCount;
+
+          for (const item of sortedChats) {
             const remoteJid = item.id || item.remoteJid || item.jid || '';
             if (!remoteJid || remoteJid.includes('@broadcast')) continue;
 
@@ -1344,7 +1362,6 @@ export class WhatsAppService {
             const cleanPhone = String(targetJid).replace(/@.*$/, '').replace(/\D/g, '');
             const matchedContact = contactsMap.get(cleanPhone) || contactsMap.get(remoteJid);
             
-            // Extract message text first to help with name extraction
             const lMsg = item.lastMessage;
             const msgContent =
               lMsg?.message?.conversation ||
@@ -1352,8 +1369,9 @@ export class WhatsAppService {
               lMsg?.message?.imageMessage?.caption ||
               (lMsg?.message?.imageMessage ? '[Foto]' : null) ||
               (lMsg?.message?.audioMessage ? '[Áudio]' : null) ||
-              (lMsg?.message?.documentMessage ? '[Documento]' : null) ||
+              (lMsg?.message?.documentMessage ? (lMsg?.message?.documentMessage?.fileName || '[Documento]') : null) ||
               (lMsg?.message?.videoMessage ? '[Vídeo]' : null) ||
+              (lMsg?.message?.stickerMessage ? '[Figurinha]' : null) ||
               null;
 
             let name = (item.pushName || item.name || matchedContact?.name || '').trim();
@@ -1364,8 +1382,9 @@ export class WhatsAppService {
             }
 
             if (!name && msgContent) {
-              const greetingMatch = String(msgContent).match(/(?:Ok|Olá|Oi|Bom dia|Boa tarde|Boa noite|Tudo bem|E aí)\s+([A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]+)/i);
-              if (greetingMatch && !['Você', 'Querido', 'Pessoal', 'Cliente', 'Amigo', 'Realizze'].includes(greetingMatch[1])) {
+              const greetingMatch = String(msgContent).match(/(?:Ok|Olá|Oi|Bom dia|Boa tarde|Boa noite)\s+([A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]+)/i);
+              const forbidden = ['Você', 'Querido', 'Querida', 'Pessoal', 'Cliente', 'Amigo', 'Amiga', 'Realizze', 'Travel', 'Equipe', 'Obrigada', 'Obrigado', 'Por', 'Sim', 'Não', 'Tudo', 'Bom', 'Boa', 'Amore', 'Enviada', 'Aguardar'];
+              if (greetingMatch && !forbidden.includes(greetingMatch[1])) {
                 name = greetingMatch[1];
               }
             }
@@ -1376,7 +1395,8 @@ export class WhatsAppService {
               } else if (cleanPhone && cleanPhone.length >= 8 && !remoteJid.includes('@lid')) {
                 name = `Cliente (+${cleanPhone})`;
               } else {
-                name = `Cliente Realizze (${cleanPhone ? cleanPhone.slice(-4) : 'WhatsApp'})`;
+                const shortId = remoteJid.replace('@lid', '').replace('@s.whatsapp.net', '').slice(-4);
+                name = `Cliente Realizze (${shortId || 'WhatsApp'})`;
               }
             }
 
@@ -1384,51 +1404,76 @@ export class WhatsAppService {
             const phoneFormatted = cleanPhone.length >= 8 ? `+${cleanPhone}` : (matchedContact?.phone || `+5581${cleanPhone}`);
             const lastMsgTime = item.conversationTimestamp
               ? new Date(Number(item.conversationTimestamp) * 1000).toISOString()
-              : (item.updatedAt || now);
+              : (lMsg?.messageTimestamp ? new Date(Number(lMsg.messageTimestamp) * 1000).toISOString() : (item.updatedAt || now));
 
             let customer = dbGet<any>(
               `SELECT * FROM customers 
                WHERE organization_id = ? 
-                 AND (phone = ? OR phone = ? OR REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '') = ?)
+                 AND (whatsapp_jid = ? OR phone = ? OR phone = ? OR REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '') = ?)
                LIMIT 1`,
-              [organizationId, phoneFormatted, cleanPhone, cleanPhone]
+              [organizationId, remoteJid, phoneFormatted, cleanPhone, cleanPhone]
             );
 
             if (!customer) {
               const custId = `cst_${Date.now()}_${Math.random().toString(36).substring(7)}`;
               const custAvatar = avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=0D9488&color=fff&size=128`;
               dbRun(
-                `INSERT INTO customers (id, organization_id, name, phone, avatar, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [custId, organizationId, name, phoneFormatted, custAvatar, lastMsgTime, now]
+                `INSERT INTO customers (id, organization_id, name, phone, avatar, whatsapp_jid, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                [custId, organizationId, name, phoneFormatted, custAvatar, remoteJid, lastMsgTime, now]
               );
-              customer = { id: custId, name, phone: phoneFormatted, avatar: custAvatar };
+              customer = { id: custId, name, phone: phoneFormatted, avatar: custAvatar, whatsapp_jid: remoteJid };
             } else {
-              if (name && name !== 'Você' && (customer.name === 'Você' || customer.name.startsWith('Cliente WhatsApp'))) {
+              if (name && name !== 'Você' && (customer.name === 'Você' || customer.name.startsWith('Cliente Realizze ('))) {
                 dbRun('UPDATE customers SET name = ?, updated_at = ? WHERE id = ?', [name, now, customer.id]);
               }
               if (avatar && avatar !== customer.avatar) {
                 dbRun('UPDATE customers SET avatar = ?, updated_at = ? WHERE id = ?', [avatar, now, customer.id]);
               }
+              if (!customer.whatsapp_jid) {
+                dbRun('UPDATE customers SET whatsapp_jid = ? WHERE id = ?', [remoteJid, customer.id]);
+              }
             }
 
             let conversation = dbGet<any>(
-              `SELECT * FROM conversations WHERE organization_id = ? AND customer_id = ? AND status != 'CLOSED' ORDER BY created_at DESC LIMIT 1`,
-              [organizationId, customer.id]
+              `SELECT * FROM conversations WHERE organization_id = ? AND (whatsapp_jid = ? OR customer_id = ?) LIMIT 1`,
+              [organizationId, remoteJid, customer.id]
             );
 
             const convId = conversation ? conversation.id : `cnv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
+            // Smart consultant assignment for Consultor 1 (João Silva) and Consultor 2 (Maria Oliveira)
+            let assignedUserId: string | null = conversation?.assigned_user_id || null;
+            let status = conversation?.status || 'WAITING';
+
+            if (!isGroup && !assignedUserId) {
+              if (directChatsAssignedJoao < 3) {
+                assignedUserId = 'usr_joao'; // Consultor 1
+                status = 'OPEN';
+                directChatsAssignedJoao++;
+              } else if (directChatsAssignedMaria < 2) {
+                assignedUserId = 'usr_maria'; // Consultor 2
+                status = 'OPEN';
+                directChatsAssignedMaria++;
+              }
+            }
+
             if (!conversation) {
               dbRun(
-                `INSERT INTO conversations (id, organization_id, customer_id, status, priority, created_at, updated_at, last_message_at)
-                 VALUES (?, ?, ?, 'WAITING', 'MEDIUM', ?, ?, ?)`,
-                [convId, organizationId, customer.id, lastMsgTime, now, lastMsgTime]
+                `INSERT INTO conversations (id, organization_id, customer_id, whatsapp_jid, assigned_user_id, status, priority, created_at, updated_at, last_message_at)
+                 VALUES (?, ?, ?, ?, ?, ?, 'MEDIUM', ?, ?, ?)`,
+                [convId, organizationId, customer.id, remoteJid, assignedUserId, status, lastMsgTime, now, lastMsgTime]
               );
             } else {
               dbRun(
-                `UPDATE conversations SET last_message_at = ?, updated_at = ? WHERE id = ?`,
-                [lastMsgTime, now, conversation.id]
+                `UPDATE conversations 
+                 SET whatsapp_jid = ?, 
+                     assigned_user_id = COALESCE(assigned_user_id, ?), 
+                     status = CASE WHEN assigned_user_id IS NULL AND ? IS NOT NULL THEN 'OPEN' ELSE status END, 
+                     last_message_at = ?, 
+                     updated_at = ? 
+                 WHERE id = ?`,
+                [remoteJid, assignedUserId, assignedUserId, lastMsgTime, now, conversation.id]
               );
             }
 
@@ -1443,10 +1488,11 @@ export class WhatsAppService {
               const exists = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [msgId]);
               if (!exists) {
                 const localMsgId = `msg_hist_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+                const senderId = isFromMe ? (assignedUserId || 'usr_joao') : customer.id;
                 dbRun(
                   `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, whatsapp_message_id, status, created_at)
                    VALUES (?, ?, ?, ?, ?, 'text', ?, ?, 'delivered', ?)`,
-                  [localMsgId, organizationId, convId, isFromMe ? 'AGENT' : 'CUSTOMER', isFromMe ? 'usr_agent' : customer.id, String(msgContent), msgId, msgTime]
+                  [localMsgId, organizationId, convId, isFromMe ? 'AGENT' : 'CUSTOMER', senderId, String(msgContent), msgId, msgTime]
                 );
               }
             }
@@ -1455,31 +1501,23 @@ export class WhatsAppService {
           }
         }
 
-        // 4. Ensure EVERY imported customer in customers table has a conversation record in conversations table
-        const customersWithoutConv = dbQuery<{ id: string; created_at: string }>(
-          `SELECT c.id, c.created_at FROM customers c
-           WHERE (c.organization_id = ? OR c.organization_id = 'org_realizzetravel' OR c.organization_id = 'org_voolivre')
-             AND NOT EXISTS (
-               SELECT 1 FROM conversations conv WHERE conv.customer_id = c.id
-             )`,
-          [organizationId]
-        );
-
-        for (const cust of customersWithoutConv) {
-          const cConvId = `cnv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-          const cTime = cust.created_at || now;
+        // Clean up any empty orphan conversations without messages and without whatsapp_jid
+        try {
           dbRun(
-            `INSERT INTO conversations (id, organization_id, customer_id, status, priority, created_at, updated_at, last_message_at)
-             VALUES (?, ?, ?, 'WAITING', 'MEDIUM', ?, ?, ?)`,
-            [cConvId, organizationId, cust.id, cTime, now, cTime]
+            `DELETE FROM conversations 
+             WHERE (organization_id = ? OR organization_id = 'org_realizzetravel')
+               AND (whatsapp_jid IS NULL OR whatsapp_jid = '')
+               AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = conversations.id)
+               AND id NOT IN ('conv_camila', 'conv_juliana', 'conv_matheus', 'conv_rodrigo')`,
+            [organizationId]
           );
-        }
+        } catch {}
       });
 
-      // 5. Batch fetch real recent messages for the top 20 active chats
+      // 5. Batch fetch full real message history for top 30 active chats
       if (Array.isArray(chatsList) && chatsList.length > 0) {
-        const topChats = chatsList.slice(0, 20);
-        for (const tc of topChats) {
+        const topChatsToFetch = chatsList.filter(c => c.id || c.remoteJid).slice(0, 30);
+        for (const tc of topChatsToFetch) {
           const jid = tc.id || tc.remoteJid || '';
           if (!jid) continue;
           try {
@@ -1488,7 +1526,7 @@ export class WhatsAppService {
               headers,
               body: JSON.stringify({
                 where: { key: { remoteJid: jid } },
-                limit: 10,
+                limit: 35,
               }),
             }, 3000);
 
@@ -1496,17 +1534,12 @@ export class WhatsAppService {
               const mData = await mRes.json().catch(() => ({}));
               const records = mData?.messages?.records || (Array.isArray(mData) ? mData : []);
               if (Array.isArray(records) && records.length > 0) {
-                const cleanPhone = String(jid).replace(/@.*$/, '').replace(/\D/g, '');
-                const customer = dbGet<any>(
-                  `SELECT id FROM customers WHERE organization_id = ? AND (phone = ? OR phone = ? OR REPLACE(REPLACE(phone, '+', ''), ' ', '') = ?) LIMIT 1`,
-                  [organizationId, `+${cleanPhone}`, cleanPhone, cleanPhone]
+                const conv = dbGet<any>(
+                  `SELECT id, customer_id, assigned_user_id FROM conversations WHERE organization_id = ? AND whatsapp_jid = ? LIMIT 1`,
+                  [organizationId, jid]
                 );
-                const conv = customer ? dbGet<any>(
-                  `SELECT id FROM conversations WHERE customer_id = ? AND organization_id = ? ORDER BY created_at DESC LIMIT 1`,
-                  [customer.id, organizationId]
-                ) : null;
 
-                if (conv && customer) {
+                if (conv) {
                   for (const r of records) {
                     const rContent =
                       r.message?.conversation ||
@@ -1514,7 +1547,9 @@ export class WhatsAppService {
                       r.message?.imageMessage?.caption ||
                       (r.message?.imageMessage ? '[Foto]' : null) ||
                       (r.message?.audioMessage ? '[Áudio]' : null) ||
-                      (r.message?.documentMessage ? '[Documento]' : null) ||
+                      (r.message?.documentMessage ? (r.message?.documentMessage?.fileName || '[Documento]') : null) ||
+                      (r.message?.videoMessage ? '[Vídeo]' : null) ||
+                      (r.message?.stickerMessage ? '[Figurinha]' : null) ||
                       null;
                     const rId = r.key?.id || r.id;
                     if (!rContent || !rId) continue;
@@ -1526,10 +1561,11 @@ export class WhatsAppService {
                     const msgExists = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [rId]);
                     if (!msgExists) {
                       const newLocalId = `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+                      const sId = rIsFromMe ? (conv.assigned_user_id || 'usr_joao') : conv.customer_id;
                       dbRun(
                         `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, whatsapp_message_id, status, created_at)
                          VALUES (?, ?, ?, ?, ?, 'text', ?, ?, 'delivered', ?)`,
-                        [newLocalId, organizationId, conv.id, rIsFromMe ? 'AGENT' : 'CUSTOMER', rIsFromMe ? 'usr_agent' : customer.id, String(rContent), rId, rTime]
+                        [newLocalId, organizationId, conv.id, rIsFromMe ? 'AGENT' : 'CUSTOMER', sId, String(rContent), rId, rTime]
                       );
                     }
                   }
@@ -1763,7 +1799,7 @@ export class WhatsAppService {
   }
 
   public static async fetchCustomerMessagesFromEvolution(
-    customerPhone: string,
+    customerIdentifier: string,
     conversationId: string,
     customerId: string,
     organizationId = 'org_realizzetravel'
@@ -1774,69 +1810,119 @@ export class WhatsAppService {
       const inst = (creds.instanceName && creds.instanceName !== 'realizze-travel') ? creds.instanceName.trim() : (process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial');
       const key = (creds.apiKey || process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026').trim();
 
-      const clean = customerPhone.replace(/\D/g, '');
-      if (!clean) return;
+      if (!customerIdentifier) return;
 
-      const jidCandidates = [
-        `${clean}@s.whatsapp.net`,
-        clean.length === 11 && clean.startsWith('55') ? `55${clean.slice(2, 4)}9${clean.slice(4)}@s.whatsapp.net` : null,
-        clean.length === 13 && clean.startsWith('55') ? `55${clean.slice(2, 4)}${clean.slice(5)}@s.whatsapp.net` : null,
-        clean.startsWith('55') ? `${clean.slice(2)}@s.whatsapp.net` : null,
-        `${clean}@lid`,
-      ].filter(Boolean) as string[];
+      const jidCandidates: string[] = [];
+      if (customerIdentifier.includes('@')) {
+        jidCandidates.push(customerIdentifier);
+      } else {
+        const clean = customerIdentifier.replace(/\D/g, '');
+        if (!clean) return;
+        jidCandidates.push(`${clean}@lid`);
+        jidCandidates.push(`${clean}@s.whatsapp.net`);
+        if (clean.length === 11 && clean.startsWith('55')) {
+          jidCandidates.push(`55${clean.slice(2, 4)}9${clean.slice(4)}@s.whatsapp.net`);
+        }
+        if (clean.length === 13 && clean.startsWith('55')) {
+          jidCandidates.push(`55${clean.slice(2, 4)}${clean.slice(5)}@s.whatsapp.net`);
+        }
+        if (clean.startsWith('55')) {
+          jidCandidates.push(`${clean.slice(2)}@s.whatsapp.net`);
+        }
+      }
 
       const headers = { 'Content-Type': 'application/json', 'apikey': key };
       const now = new Date().toISOString();
 
-      const orConditions = jidCandidates.map(j => ([
-        { key: { remoteJid: j } },
-        { key: { remoteJidAlt: j } }
-      ])).flat();
+      const conv = dbGet<any>(
+        'SELECT id, assigned_user_id, customer_id, whatsapp_jid FROM conversations WHERE id = ?',
+        [conversationId]
+      );
+      const assignedAgentId = conv?.assigned_user_id || 'usr_joao';
 
-      try {
-        const res = await fetchWithTimeout(`${baseUrl}/chat/findMessages/${inst}`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            where: { OR: orConditions },
-            limit: 50,
-          }),
-        }, 4000);
+      let allRecords: any[] = [];
+      for (const targetJid of jidCandidates) {
+        try {
+          const res = await fetchWithTimeout(`${baseUrl}/chat/findMessages/${inst}`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              where: { key: { remoteJid: targetJid } },
+              limit: 50,
+            }),
+          }, 3500);
 
-        if (res.ok) {
-          const data = await res.json().catch(() => ({}));
-          const records = data?.messages?.records || (Array.isArray(data) ? data : []);
-          if (Array.isArray(records) && records.length > 0) {
-            for (const r of records) {
-              const content =
-                r.message?.conversation ||
-                r.message?.extendedTextMessage?.text ||
-                r.message?.imageMessage?.caption ||
-                (r.message?.imageMessage ? '[Foto]' : null) ||
-                (r.message?.audioMessage ? '[Áudio]' : null) ||
-                (r.message?.documentMessage ? '[Documento]' : null) ||
-                (r.message?.videoMessage ? '[Vídeo]' : null) ||
-                null;
-              const rId = r.key?.id || r.id;
-              if (!content || !rId) continue;
-              const isFromMe = r.key?.fromMe === true;
-              const time = r.messageTimestamp
-                ? new Date(Number(r.messageTimestamp) * 1000).toISOString()
-                : now;
-
-              const exists = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [rId]);
-              if (!exists) {
-                const localId = `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-                dbRun(
-                  `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, whatsapp_message_id, status, created_at)
-                   VALUES (?, ?, ?, ?, ?, 'text', ?, ?, 'delivered', ?)`,
-                  [localId, organizationId, conversationId, isFromMe ? 'AGENT' : 'CUSTOMER', isFromMe ? 'usr_agent' : customerId, String(content), rId, time]
-                );
+          if (res.ok) {
+            const data = await res.json().catch(() => ({}));
+            const records = data?.messages?.records || (Array.isArray(data) ? data : []);
+            if (Array.isArray(records) && records.length > 0) {
+              allRecords = records;
+              if (conv && !conv.whatsapp_jid) {
+                dbRun('UPDATE conversations SET whatsapp_jid = ? WHERE id = ?', [targetJid, conversationId]);
               }
+              break;
             }
           }
+        } catch {}
+      }
+
+      if (allRecords.length > 0) {
+        let latestTimestamp = now;
+        let detectedCustomerName = '';
+
+        for (const r of allRecords) {
+          const content =
+            r.message?.conversation ||
+            r.message?.extendedTextMessage?.text ||
+            r.message?.imageMessage?.caption ||
+            (r.message?.imageMessage ? '[Foto]' : null) ||
+            (r.message?.audioMessage ? '[Áudio]' : null) ||
+            (r.message?.documentMessage ? (r.message?.documentMessage?.fileName || '[Documento]') : null) ||
+            (r.message?.videoMessage ? '[Vídeo]' : null) ||
+            (r.message?.stickerMessage ? '[Figurinha]' : null) ||
+            null;
+          const rId = r.key?.id || r.id;
+          if (!content || !rId) continue;
+          const isFromMe = r.key?.fromMe === true;
+          const time = r.messageTimestamp
+            ? new Date(Number(r.messageTimestamp) * 1000).toISOString()
+            : now;
+
+          if (time > latestTimestamp) latestTimestamp = time;
+
+          if (!isFromMe && r.pushName && r.pushName !== 'Você' && !/^\d+$/.test(r.pushName)) {
+            detectedCustomerName = r.pushName.trim();
+          } else if (content) {
+            const m = String(content).match(/(?:Ok|Olá|Oi|Bom dia|Boa tarde|Boa noite)\s+([A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]+)/i);
+            const forbidden = ['Você', 'Querido', 'Querida', 'Pessoal', 'Cliente', 'Amigo', 'Amiga', 'Realizze', 'Travel', 'Equipe', 'Obrigada', 'Obrigado', 'Por', 'Sim', 'Não', 'Tudo', 'Bom', 'Boa', 'Amore', 'Enviada', 'Aguardar'];
+            if (m && !forbidden.includes(m[1])) {
+              detectedCustomerName = m[1];
+            }
+          }
+
+          const exists = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [rId]);
+          if (!exists) {
+            const localId = `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+            dbRun(
+              `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, whatsapp_message_id, status, created_at)
+               VALUES (?, ?, ?, ?, ?, 'text', ?, ?, 'delivered', ?)`,
+              [localId, organizationId, conversationId, isFromMe ? 'AGENT' : 'CUSTOMER', isFromMe ? assignedAgentId : customerId, String(content), rId, time]
+            );
+          }
         }
-      } catch {}
+
+        dbRun(
+          `UPDATE conversations SET last_message_at = ?, updated_at = ? WHERE id = ?`,
+          [latestTimestamp, now, conversationId]
+        );
+
+        if (detectedCustomerName) {
+          const currentCust = dbGet<any>('SELECT name FROM customers WHERE id = ?', [customerId]);
+          if (currentCust && (currentCust.name.startsWith('Cliente Realizze') || currentCust.name === 'Você' || /^\+?\d+$/.test(currentCust.name))) {
+            dbRun('UPDATE customers SET name = ?, updated_at = ? WHERE id = ?', [detectedCustomerName, now, customerId]);
+          }
+        }
+      }
     } catch (e) {
       console.warn('Could not auto-fetch customer messages from Evolution API:', e);
     }

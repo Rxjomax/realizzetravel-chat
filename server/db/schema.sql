@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS customers (
   passenger_count INTEGER DEFAULT 1,
   budget TEXT,
   avatar TEXT,
+  whatsapp_jid TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS customers (
 
 CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
 CREATE INDEX IF NOT EXISTS idx_customers_org ON customers(organization_id);
+CREATE INDEX IF NOT EXISTS idx_customers_jid ON customers(whatsapp_jid);
 
 -- Conversations table (Queue, Assignment, State)
 CREATE TABLE IF NOT EXISTS conversations (
@@ -51,6 +53,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   organization_id TEXT NOT NULL,
   customer_id TEXT NOT NULL,
   assigned_user_id TEXT,
+  whatsapp_jid TEXT,
   status TEXT NOT NULL DEFAULT 'WAITING' CHECK(status IN ('WAITING', 'ASSIGNED', 'OPEN', 'CLOSED', 'TRANSFERRED')),
   priority TEXT NOT NULL DEFAULT 'MEDIUM' CHECK(priority IN ('LOW', 'MEDIUM', 'HIGH', 'URGENT')),
   created_at TEXT NOT NULL,

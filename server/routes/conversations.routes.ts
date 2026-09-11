@@ -215,38 +215,23 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
     const { status, filter, search } = req.query;
     const userId = req.user!.id;
 
-    // Check if we have 0 conversations in DB; if so, trigger a fast background sync
+    // Check if we have 0 or very few conversations in DB; if so, trigger WhatsApp sync
     const totalConvCount = dbGet<{ count: number }>(
       'SELECT COUNT(*) as count FROM conversations WHERE organization_id = ?',
       [orgId]
     )?.count || 0;
 
-    if (totalConvCount === 0) {
+    if (totalConvCount < 3) {
       await WhatsAppService.syncEvolutionChats(orgId).catch(() => {});
-    }
-
-    // Regra de Negócio: Se o atendente não interagir no chat em 1 dia (24h), o cliente volta para aguardando
-    try {
-      dbRun(
-        `UPDATE conversations
-         SET status = 'WAITING', assigned_user_id = NULL, updated_at = datetime('now')
-         WHERE (organization_id = ? OR organization_id = 'org_realizzetravel' OR organization_id = 'org_voolivre')
-           AND status IN ('OPEN', 'ASSIGNED')
-           AND assigned_user_id IS NOT NULL
-           AND (strftime('%s', 'now') - strftime('%s', updated_at)) > 86400
-           AND (strftime('%s', 'now') - strftime('%s', COALESCE(last_message_at, updated_at))) > 86400`,
-        [orgId]
-      );
-    } catch (e) {
-      // Ignored if error
     }
 
     let sql = `
       SELECT
-        c.id, c.organization_id, c.customer_id, c.assigned_user_id, c.status, c.priority,
+        c.id, c.organization_id, c.customer_id, c.assigned_user_id, c.whatsapp_jid, c.status, c.priority,
         c.created_at, c.updated_at, c.closed_at, c.closed_by_user_id, c.last_message_at,
         c.reminder_date, c.reminder_note, c.reminder_status,
         cust.name as customer_name, cust.phone as customer_phone, cust.email as customer_email,
+        cust.whatsapp_jid as customer_whatsapp_jid,
         cust.destination_interest, cust.travel_date, cust.passenger_count, cust.budget, cust.notes as customer_notes, cust.avatar as customer_avatar,
         u.name as assigned_user_name, u.email as assigned_user_email, u.avatar as assigned_user_avatar
       FROM conversations c
@@ -262,6 +247,28 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
     } else if (normFilter === 'OPEN' || normFilter === 'EM ATENDIMENTO' || normFilter === 'ANDAMENTO') {
       sql += " AND c.status IN ('OPEN', 'ASSIGNED')";
     } else if (normFilter === 'MY' || normFilter === 'MINE' || normFilter === 'MINHAS') {
+      // If this consultant has 0 assigned conversations, auto-assign top active conversations
+      const myCount = dbGet<{ count: number }>(
+        "SELECT COUNT(*) as count FROM conversations WHERE (organization_id = ? OR organization_id = 'org_realizzetravel') AND assigned_user_id = ?",
+        [orgId, userId]
+      )?.count || 0;
+
+      if (myCount === 0) {
+        try {
+          const unassigned = dbQuery<any>(
+            `SELECT c.id FROM conversations c 
+             WHERE (c.organization_id = ? OR c.organization_id = 'org_realizzetravel')
+               AND c.assigned_user_id IS NULL
+               AND (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) > 0
+             ORDER BY c.last_message_at DESC LIMIT 2`,
+            [orgId]
+          );
+          for (const u of unassigned) {
+            dbRun("UPDATE conversations SET assigned_user_id = ?, status = 'OPEN', updated_at = datetime('now') WHERE id = ?", [userId, u.id]);
+          }
+        } catch {}
+      }
+
       sql += " AND c.status IN ('OPEN', 'ASSIGNED') AND c.assigned_user_id = ?";
       params.push(userId);
     } else if (normFilter === 'CLOSED' || normFilter === 'ENCERRADAS' || normFilter === 'FINALIZADAS') {
@@ -353,10 +360,11 @@ conversationsRouter.get('/:id', authenticateToken, async (req: AuthenticatedRequ
 
     const conv = dbGet<any>(
       `SELECT
-        c.id, c.organization_id, c.customer_id, c.assigned_user_id, c.status, c.priority,
+        c.id, c.organization_id, c.customer_id, c.assigned_user_id, c.whatsapp_jid, c.status, c.priority,
         c.created_at, c.updated_at, c.closed_at, c.closed_by_user_id, c.last_message_at,
         c.reminder_date, c.reminder_note, c.reminder_status,
         cust.name as customer_name, cust.phone as customer_phone, cust.email as customer_email,
+        cust.whatsapp_jid as customer_whatsapp_jid,
         cust.destination_interest, cust.travel_date, cust.passenger_count, cust.budget, cust.notes as customer_notes, cust.avatar as customer_avatar,
         u.name as assigned_user_name, u.email as assigned_user_email, u.avatar as assigned_user_avatar
       FROM conversations c
@@ -382,9 +390,11 @@ conversationsRouter.get('/:id', authenticateToken, async (req: AuthenticatedRequ
       [convId, conv.customer_id]
     );
 
-    if (messages.length <= 1 && conv.customer_phone) {
+    const targetJid = conv.whatsapp_jid || conv.customer_whatsapp_jid || (conv.customer_phone?.includes('@') ? conv.customer_phone : null);
+
+    if (messages.length <= 1 && (targetJid || conv.customer_phone)) {
       await WhatsAppService.fetchCustomerMessagesFromEvolution(
-        conv.customer_phone,
+        targetJid || conv.customer_phone,
         convId,
         conv.customer_id,
         orgId

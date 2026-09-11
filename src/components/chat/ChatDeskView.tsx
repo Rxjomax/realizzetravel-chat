@@ -197,7 +197,7 @@ export const ChatDeskView: React.FC = () => {
       setNotes(data.notes || []);
 
       // Pre-fill editable fields
-      const cust = data.conversation.customer;
+      const cust = data.conversation?.customer;
       setTravelDestination(cust?.destination_interest || '');
       setTravelDate(cust?.travel_date || '');
       setTravelPassengers(cust?.passenger_count || 2);
