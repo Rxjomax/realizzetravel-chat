@@ -7,6 +7,7 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { createExpressApp, ensureDbReady } from './server/app';
 import { initWebSocketServer } from './server/realtime/ws';
+import { WhatsAppService } from './server/services/whatsapp.service';
 
 async function startServer() {
   const PORT = 3000;
@@ -14,6 +15,9 @@ async function startServer() {
   // Initialize DB and Seed Data
   console.log('📦 Initializing database...');
   await ensureDbReady();
+
+  // Start background auto-sync worker for WhatsApp
+  WhatsAppService.startAutoSyncWorker(20000);
 
   const app = createExpressApp();
   const httpServer = http.createServer(app);

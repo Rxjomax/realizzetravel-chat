@@ -1824,6 +1824,27 @@ export class WhatsAppService {
       console.warn('Could not auto-fetch customer messages from Evolution API:', e);
     }
   }
+
+  private static autoSyncTimer: NodeJS.Timeout | null = null;
+
+  public static startAutoSyncWorker(intervalMs = 25000): void {
+    if (this.autoSyncTimer) return;
+    console.log(`🔄 [WhatsAppService] Sincronização automática em segundo plano ativada (intervalo: ${intervalMs / 1000}s)`);
+
+    // Run initial sync after a short delay on startup
+    setTimeout(() => {
+      this.syncEvolutionChats('org_realizzetravel').catch(() => {});
+    }, 3000);
+
+    this.autoSyncTimer = setInterval(async () => {
+      try {
+        await this.syncEvolutionChats('org_realizzetravel');
+      } catch (err) {
+        // quiet catch
+      }
+    }, intervalMs);
+  }
 }
+
 
 

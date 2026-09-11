@@ -196,11 +196,11 @@ conversationsRouter.get('/reports/commercial', authenticateToken, (req: Authenti
   }
 });
 
-// POST /api/conversations/sync-whatsapp - Force sync recent chats directly from Z-API
+// POST /api/conversations/sync-whatsapp - Force sync recent chats directly from WhatsApp Gateway / Evolution API
 conversationsRouter.post('/sync-whatsapp', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const orgId = req.user!.organization_id;
-    const result = await WhatsAppService.syncZapiRecentChats(orgId);
+    const result = await WhatsAppService.syncEvolutionChats(orgId);
     res.json({ success: true, count: result.count });
   } catch (error: any) {
     console.error('Error syncing whatsapp:', error);
