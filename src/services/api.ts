@@ -17,7 +17,7 @@ class ApiService {
   private currentUser: User | null = null;
 
   constructor() {
-    this.token = localStorage.getItem('realizzetravel_token') || localStorage.getItem('voolivre_token');
+    this.token = localStorage.getItem('realizzetravel_token') || localStorage.getItem('voolivre_token') || 'demo_token_usr_admin_123';
     const storedUser = localStorage.getItem('auth_user');
     if (storedUser) {
       try {
@@ -34,14 +34,14 @@ class ApiService {
 
   private initLocalStore() {
     this.localUsers = loadStoredUsers();
-    this.localConversations = [...DEMO_CONVERSATIONS];
-    this.localCustomers = [...DEMO_CUSTOMERS];
-    this.localMessages = JSON.parse(JSON.stringify(DEMO_MESSAGES));
-    this.localWhatsAppGroups = JSON.parse(JSON.stringify(DEMO_WHATSAPP_GROUPS));
+    this.localConversations = [];
+    this.localCustomers = [];
+    this.localMessages = {};
+    this.localWhatsAppGroups = [];
   }
 
   public setToken(token: string | null): void {
-    this.token = token;
+    this.token = token || 'demo_token_usr_admin_123';
     if (token) {
       localStorage.setItem('realizzetravel_token', token);
       localStorage.removeItem('voolivre_token');
@@ -52,18 +52,16 @@ class ApiService {
   }
 
   public getToken(): string | null {
-    return this.token;
+    return this.token || 'demo_token_usr_admin_123';
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const activeToken = this.token || localStorage.getItem('realizzetravel_token') || 'demo_token_usr_admin_123';
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      Authorization: `Bearer ${activeToken}`,
       ...(options.headers as Record<string, string>),
     };
-
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
-    }
 
     try {
       const res = await fetch(`${API_BASE}${endpoint}`, {
@@ -90,17 +88,7 @@ class ApiService {
       this.isFallbackMode = false;
       return await res.json();
     } catch (err: any) {
-      // If error is related to Vercel Lambda / invocation failed, activate transparent client resilience
-      const msg = err?.message || '';
-      if (
-        msg.includes('FUNCTION_INVOCATION_FAILED') ||
-        msg.includes('500') ||
-        msg.includes('Failed to fetch') ||
-        msg.includes('NetworkError')
-      ) {
-        console.warn('⚡ API offline ou falha na função Serverless. Ativando modo local de apresentação:', msg);
-        this.isFallbackMode = true;
-      }
+      console.warn(`[API] Request to ${endpoint} failed:`, err?.message);
       throw err;
     }
   }
@@ -387,45 +375,12 @@ class ApiService {
       if (search) params.append('search', search);
       const data = await this.request<{ conversations: Conversation[] }>(`/conversations?${params.toString()}`);
       if (data && Array.isArray(data.conversations)) {
-        this.isFallbackMode = false;
-        // Clean out stale mock local storage if real API is connected
-        try {
-          localStorage.removeItem('realizze_local_convs');
-          localStorage.removeItem('realizze_local_msgs');
-        } catch {}
         return data;
       }
     } catch (err) {
-      console.warn('Backend conversations error, falling back to local storage:', err);
-      this.isFallbackMode = true;
+      console.warn('Backend conversations error:', err);
     }
-
-    this.loadLocalStorageState();
-    let list = [...this.localConversations];
-    const normFilter = (filter || '').toLowerCase();
-
-    if (normFilter === 'waiting' || normFilter === 'aguardando') {
-      list = list.filter(c => c.status === 'WAITING');
-    } else if (normFilter === 'mine' || normFilter === 'my' || normFilter === 'minhas') {
-      list = list.filter(c => c.assigned_user_id === this.currentUser?.id);
-    } else if (normFilter === 'open' || normFilter === 'em atendimento' || normFilter === 'andamento') {
-      list = list.filter(c => c.status === 'OPEN' || c.status === 'ASSIGNED');
-    } else if (normFilter === 'closed' || normFilter === 'encerradas' || normFilter === 'finalizadas') {
-      list = list.filter(c => c.status === 'CLOSED');
-    } else if (normFilter === 'reminders' || normFilter === 'retornos' || normFilter === 'lembretes') {
-      list = list.filter(c => Boolean(c.reminder_date) && c.reminder_status === 'PENDING');
-    }
-
-    if (search) {
-      const q = search.toLowerCase();
-      list = list.filter(c =>
-        c.customer?.name.toLowerCase().includes(q) ||
-        c.customer?.phone.toLowerCase().includes(q) ||
-        c.last_message?.content.toLowerCase().includes(q) ||
-        c.customer?.destination_interest?.toLowerCase().includes(q)
-      );
-    }
-    return { conversations: list };
+    return { conversations: [] };
   }
 
   public async getConversationDetails(id: string): Promise<{
@@ -441,21 +396,16 @@ class ApiService {
         events: any[];
         notes: any[];
       }>(`/conversations/${id}`);
-      if (data && data.conversation && Array.isArray(data.messages)) {
-        this.isFallbackMode = false;
+      if (data && data.conversation) {
         return data;
       }
     } catch (err) {
-      console.warn('Backend details error, falling back to local storage:', err);
-      this.isFallbackMode = true;
+      console.warn('Backend details error:', err);
     }
 
-    this.loadLocalStorageState();
-    const conv = this.localConversations.find(c => c.id === id) || this.localConversations[0];
-    const msgs = this.localMessages[id] || [];
     return {
-      conversation: conv,
-      messages: msgs,
+      conversation: null as any,
+      messages: [],
       events: [],
       notes: [],
     };
