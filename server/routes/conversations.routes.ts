@@ -303,8 +303,17 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
 
     const rows = dbQuery<any>(sql, params);
 
+    // Deduplicate rows by customer phone or customer_id to guarantee no duplicate contacts in list
+    const seenCustKeys = new Set<string>();
+    const uniqueRows = rows.filter((r) => {
+      const k = r.customer_phone?.replace(/\D/g, '') || r.customer_id || r.id;
+      if (seenCustKeys.has(k)) return false;
+      seenCustKeys.add(k);
+      return true;
+    });
+
     // Enrich with last message & unread counts
-    const conversations = rows.map((r) => {
+    const conversations = uniqueRows.map((r) => {
       const lastMsg = dbGet<any>(
         'SELECT id, sender_type, content, message_type, status, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1',
         [r.id]

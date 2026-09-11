@@ -370,9 +370,17 @@ class ApiService {
       if (search) params.append('search', search);
       const data = await this.request<{ conversations: Conversation[] }>(`/conversations?${params.toString()}`);
       if (data && Array.isArray(data.conversations)) {
-        this.localConversations = data.conversations;
-        saveStoredConversations(data.conversations);
-        return data;
+        const seenKeys = new Set<string>();
+        const deduped = data.conversations.filter((c) => {
+          if (!c) return false;
+          const k = c.customer?.phone?.replace(/\D/g, '') || c.customer_id || c.id;
+          if (seenKeys.has(k)) return false;
+          seenKeys.add(k);
+          return true;
+        });
+        this.localConversations = deduped;
+        saveStoredConversations(deduped);
+        return { conversations: deduped };
       }
     } catch (err) {
       console.warn('Backend conversations error, serving synced snapshot data:', err);

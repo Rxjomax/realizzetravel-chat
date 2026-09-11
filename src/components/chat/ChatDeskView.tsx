@@ -30,10 +30,43 @@ import {
   MessageSquarePlus,
   BellRing,
   Trash2,
+  Volume2,
+  Mic,
 } from 'lucide-react';
 import { extractTravelParameters, hasExtractedAnyInfo, parseBudgetValue } from '../../utils/travelExtractor';
 import { formatPhoneNumber } from '../../utils/formatters';
 import { playNotificationSound } from '../../services/sound';
+
+export function cleanMessageContent(content: string): string {
+  if (!content) return '';
+  let cleaned = content.trim();
+
+  // Strip leading prefixes like *[Consultor João Silva]*: or Consultor RealizzeTravel: or João Silva:
+  cleaned = cleaned.replace(/^\*\[[^\]]+\]\*:\s*/, '');
+  cleaned = cleaned.replace(/^Consultor\s+[\w\s.-]+:\s*/i, '');
+  cleaned = cleaned.replace(/^\[Consultor\s+[\w\s.-]+\]:\s*/i, '');
+
+  return cleaned.trim();
+}
+
+export function isDuplicateMessage(m1: Message, m2: Message): boolean {
+  if (!m1 || !m2) return false;
+  if (m1.id && m2.id && m1.id === m2.id) return true;
+  if (m1.whatsapp_message_id && m2.whatsapp_message_id && m1.whatsapp_message_id === m2.whatsapp_message_id) return true;
+
+  const c1 = cleanMessageContent(m1.content);
+  const c2 = cleanMessageContent(m2.content);
+
+  // Match if same sender, clean content matches, and timestamps within 90 seconds
+  if (c1 && c2 && c1 === c2 && m1.sender_type === m2.sender_type) {
+    const t1 = new Date(m1.created_at || Date.now()).getTime();
+    const t2 = new Date(m2.created_at || Date.now()).getTime();
+    if (Math.abs(t1 - t2) < 90000) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function extractConsultantName(fullName?: string | null): string {
   if (!fullName) return 'Atendente';
@@ -162,10 +195,15 @@ export const ChatDeskView: React.FC = () => {
         api.getConversations(filterParam, searchQuery),
         api.getConversations(undefined, ''),
       ]);
-      // Deduplicate conversations by ID
-      const uniqueConvs = (data.conversations || []).filter((c, idx, arr) =>
-        arr.findIndex((item) => item.id === c.id) === idx
-      );
+      // Deduplicate conversations by customer phone / ID so the list is ALWAYS 100% unique per customer!
+      const seenCustKeys = new Set<string>();
+      const uniqueConvs = (data.conversations || []).filter((c) => {
+        if (!c) return false;
+        const k = c.customer?.phone?.replace(/\D/g, '') || c.customer_id || c.id;
+        if (seenCustKeys.has(k)) return false;
+        seenCustKeys.add(k);
+        return true;
+      });
       setConversations(uniqueConvs);
       setAllConversationsForStats(allData.conversations || []);
 
@@ -195,8 +233,7 @@ export const ChatDeskView: React.FC = () => {
         return;
       }
       setSelectedConv(data.conversation);
-      // Deduplicate messages by ID and echo content within 60s
-      const seenMsgIds = new Set<string>();
+      // Deduplicate messages by ID and content match
       let msgsList = data.messages || [];
       if (msgsList.length === 0 && data.conversation.last_message) {
         msgsList = [data.conversation.last_message];
@@ -204,18 +241,8 @@ export const ChatDeskView: React.FC = () => {
       const uniqueMsgs: Message[] = [];
       for (const m of msgsList) {
         if (!m) continue;
-        const msgKey = m.id || `temp_${Math.random()}`;
-        if (seenMsgIds.has(msgKey)) continue;
-        seenMsgIds.add(msgKey);
-
-        // Only discard if whatsapp_message_id is identical or if message id matches
-        const isDuplicate = uniqueMsgs.some(
-          (prev) =>
-            (prev.whatsapp_message_id && m.whatsapp_message_id && prev.whatsapp_message_id === m.whatsapp_message_id) ||
-            (prev.id && m.id && prev.id === m.id)
-        );
-        if (isDuplicate) continue;
-
+        const isDup = uniqueMsgs.some((prev) => isDuplicateMessage(prev, m));
+        if (isDup) continue;
         uniqueMsgs.push(m);
       }
       setMessages(uniqueMsgs);
@@ -324,16 +351,11 @@ export const ChatDeskView: React.FC = () => {
       if (payload?.message?.sender_type === 'CUSTOMER') {
         playNotificationSound('message');
       }
-      if (selectedIdRef.current === payload.conversationId) {
+      if (selectedIdRef.current === payload.conversationId && payload?.message) {
         setMessages((prev) => {
-          if (prev.some((m) => m.id === payload.message.id)) return prev;
-          const isEcho = prev.some(
-            (m) =>
-              m.sender_type === payload.message.sender_type &&
-              m.content?.trim() === payload.message.content?.trim() &&
-              Math.abs(new Date(m.created_at).getTime() - new Date(payload.message.created_at).getTime()) < 60000
-          );
-          if (isEcho) return prev;
+          if (prev.some((m) => isDuplicateMessage(m, payload.message))) {
+            return prev.map((m) => (isDuplicateMessage(m, payload.message) ? payload.message : m));
+          }
           return [...prev, payload.message];
         });
       }
@@ -523,7 +545,9 @@ export const ChatDeskView: React.FC = () => {
 
       const res = await api.sendMessage(selectedConvId, messageToSend);
       setMessages((prev) => {
-        if (prev.some((m) => m.id === res.message.id)) return prev;
+        if (prev.some((m) => isDuplicateMessage(m, res.message))) {
+          return prev.map((m) => (isDuplicateMessage(m, res.message) ? res.message : m));
+        }
         return [...prev, res.message];
       });
       await fetchConversations();
@@ -1355,14 +1379,45 @@ export const ChatDeskView: React.FC = () => {
                         )}
                       </div>
 
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                        {!isCustomer && !isSystem && !m.content.startsWith(`*[${consultantDisplayName}]*`) && !m.content.startsWith(`${consultantDisplayName}:`) && (
-                          <span className="font-bold text-emerald-900 text-xs block mb-0.5 select-none">
-                            {consultantDisplayName}:
-                          </span>
-                        )}
-                        {m.content}
-                      </p>
+                      {/* Message Content: Text or Audio Player */}
+                      {(() => {
+                        const isAudio =
+                          m.message_type === 'audio' ||
+                          (m.content && (m.content.includes('[Áudio]') || m.content.includes('[Audio]')));
+                        const cleanedText = cleanMessageContent(m.content);
+
+                        if (isAudio) {
+                          return (
+                            <div className="flex flex-col gap-2 my-1.5 min-w-[220px] sm:min-w-[260px]">
+                              <div className="flex items-center gap-2 text-xs font-semibold text-emerald-900 bg-emerald-100/70 p-2 rounded-xl border border-emerald-200/60">
+                                <Volume2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                                <span>Mensagem de Áudio</span>
+                              </div>
+                              {m.media_url ? (
+                                <audio
+                                  controls
+                                  src={m.media_url}
+                                  className="w-full h-10 rounded-lg focus:outline-none"
+                                  preload="metadata"
+                                >
+                                  Seu navegador não suporta a reprodução deste áudio.
+                                </audio>
+                              ) : (
+                                <div className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50/80 p-2 rounded-lg border border-slate-200/80">
+                                  <Mic className="w-4 h-4 text-slate-500 shrink-0" />
+                                  <span className="italic">Áudio recebido do WhatsApp</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                            {cleanedText}
+                          </p>
+                        );
+                      })()}
 
                       <div
                         className={`flex items-center gap-1.5 text-[10px] mt-1 justify-end ${
