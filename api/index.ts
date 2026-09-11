@@ -379,9 +379,23 @@ export default async function handler(req: any, res: any) {
     console.warn('ensureDbReady notice:', err?.message || err);
   }
 
-  // Fix req.url if rewritten to /api/index by Vercel
-  if (requestPath && requestPath !== '/api/index' && !rawUrl.includes('/api/auth') && !rawUrl.includes('/api/conversations')) {
-    req.url = requestPath;
+  // Fix req.url so Express router matching works seamlessly on Vercel
+  if (requestPath && requestPath !== '/api/index') {
+    const rawQueryIndex = rawUrl.indexOf('?');
+    const hasQuery = rawQueryIndex !== -1;
+    let queryPart = hasQuery ? rawUrl.substring(rawQueryIndex) : '';
+
+    if (queryPart) {
+      queryPart = queryPart
+        .replace(/([?&])(path|__path)=[^&]*&?/g, '$1')
+        .replace(/[?&]$/, '');
+      if (queryPart && !queryPart.startsWith('?')) {
+        queryPart = '?' + queryPart;
+      }
+    }
+
+    const cleanPath = requestPath.split('?')[0];
+    req.url = cleanPath + queryPart;
   }
 
   const app = getApp();

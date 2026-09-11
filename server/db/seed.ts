@@ -241,7 +241,191 @@ export async function seedDatabase(): Promise<void> {
       ]
     );
 
-    // 4. Initial Audit Log
+    // 4. Default Seed Customers
+    const customers = [
+      {
+        id: 'cust_camila',
+        name: 'Camila Rodrigues',
+        phone: '+5581999991111',
+        email: 'camila.rodrigues@email.com',
+        destination_interest: 'Maragogi - AL (Resort All Inclusive)',
+        travel_date: '2026-11-15',
+        passenger_count: 2,
+        budget: 'R$ 7.500,00',
+        notes: 'Preferência por quarto de frente para o mar com café da manhã incluso.',
+        avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=120&h=120&fit=crop&crop=face',
+      },
+      {
+        id: 'cust_juliana',
+        name: 'Juliana Costa',
+        phone: '+5581999993333',
+        email: 'juliana.costa@email.com',
+        destination_interest: 'Gramado & Canela - RS',
+        travel_date: '2026-12-01',
+        passenger_count: 4,
+        budget: 'R$ 12.000,00',
+        notes: 'Viagem em família com 2 crianças.',
+        avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=120&h=120&fit=crop&crop=face',
+      },
+      {
+        id: 'cust_matheus',
+        name: 'Matheus Silva',
+        phone: '+5581999992222',
+        email: 'matheus.silva@email.com',
+        destination_interest: 'Cancún, México',
+        travel_date: '2027-01-20',
+        passenger_count: 2,
+        budget: 'R$ 15.000,00',
+        notes: 'Lua de mel. Busca opção com passeios aos Cenotes.',
+        avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=120&h=120&fit=crop&crop=face',
+      },
+      {
+        id: 'cust_rodrigo',
+        name: 'Rodrigo Santos',
+        phone: '+5581999994444',
+        email: 'rodrigo.santos@email.com',
+        destination_interest: 'Cruzeiro pelo Caribe',
+        travel_date: '2026-10-10',
+        passenger_count: 2,
+        budget: 'R$ 10.000,00',
+        notes: 'Saindo de Miami ou Port Canaveral.',
+        avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&h=120&fit=crop&crop=face',
+      },
+      {
+        id: 'cust_gabriel',
+        name: 'Gabriel Alves',
+        phone: '+5581999995555',
+        email: 'gabriel.alves@email.com',
+        destination_interest: 'Orlando - Disney World',
+        travel_date: '2026-09-01',
+        passenger_count: 3,
+        budget: 'R$ 22.000,00',
+        notes: 'Pacote fechado com ingressos para 4 parques.',
+        avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=120&h=120&fit=crop&crop=face',
+      },
+    ];
+
+    for (const c of customers) {
+      dbRun(
+        `INSERT INTO customers (id, organization_id, name, phone, email, destination_interest, travel_date, passenger_count, budget, notes, avatar, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [c.id, orgId, c.name, c.phone, c.email, c.destination_interest, c.travel_date, c.passenger_count, c.budget, c.notes, c.avatar, yesterday, now]
+      );
+    }
+
+    // 5. Default Seed Conversations
+    const conversations = [
+      {
+        id: 'conv_camila',
+        customer_id: 'cust_camila',
+        assigned_user_id: 'usr_joao', // Consultor 1
+        status: 'OPEN',
+        priority: 'HIGH',
+        last_message_at: now,
+      },
+      {
+        id: 'conv_juliana',
+        customer_id: 'cust_juliana',
+        assigned_user_id: 'usr_joao', // Consultor 1
+        status: 'OPEN',
+        priority: 'MEDIUM',
+        last_message_at: oneHourAgo,
+      },
+      {
+        id: 'conv_matheus',
+        customer_id: 'cust_matheus',
+        assigned_user_id: null, // WAITING
+        status: 'WAITING',
+        priority: 'HIGH',
+        last_message_at: twoHoursAgo,
+      },
+      {
+        id: 'conv_rodrigo',
+        customer_id: 'cust_rodrigo',
+        assigned_user_id: 'usr_maria', // Consultor 2
+        status: 'OPEN',
+        priority: 'MEDIUM',
+        last_message_at: yesterday,
+      },
+      {
+        id: 'conv_gabriel',
+        customer_id: 'cust_gabriel',
+        assigned_user_id: 'usr_joao', // Consultor 1
+        status: 'CLOSED',
+        priority: 'LOW',
+        last_message_at: yesterday,
+      },
+    ];
+
+    for (const conv of conversations) {
+      dbRun(
+        `INSERT INTO conversations (id, organization_id, customer_id, assigned_user_id, status, priority, created_at, updated_at, last_message_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [conv.id, orgId, conv.customer_id, conv.assigned_user_id, conv.status, conv.priority, yesterday, now, conv.last_message_at]
+      );
+    }
+
+    // 6. Default Seed Messages
+    const seedMsgs = [
+      {
+        id: 'msg_cam_1',
+        conversation_id: 'conv_camila',
+        sender_type: 'CUSTOMER',
+        sender_id: 'cust_camila',
+        content: 'Olá! Gostaria de um orçamento para o Salinas Maragogi em novembro.',
+        created_at: twoHoursAgo,
+      },
+      {
+        id: 'msg_cam_2',
+        conversation_id: 'conv_camila',
+        sender_type: 'AGENT',
+        sender_id: 'usr_joao',
+        content: 'Olá Camila! Tudo bem? Meu nome é João (Consultor 1). Já estou montando uma cotação especial All Inclusive para você!',
+        created_at: oneHourAgo,
+      },
+      {
+        id: 'msg_cam_3',
+        conversation_id: 'conv_camila',
+        sender_type: 'CUSTOMER',
+        sender_id: 'cust_camila',
+        content: 'Perfeito João, fico no aguardo! Pode incluir voo direto saindo do Recife?',
+        created_at: now,
+      },
+      {
+        id: 'msg_jul_1',
+        conversation_id: 'conv_juliana',
+        sender_type: 'CUSTOMER',
+        sender_id: 'cust_juliana',
+        content: 'Bom dia! Vocês têm pacotes para o Natal Luz em Gramado com hotel perto da Av. Borges de Medeiros?',
+        created_at: twoHoursAgo,
+      },
+      {
+        id: 'msg_jul_2',
+        conversation_id: 'conv_juliana',
+        sender_type: 'AGENT',
+        sender_id: 'usr_joao',
+        content: 'Bom dia Juliana! Temos sim, reservamos os melhores hotéis centrais. Quantas noites vocês pretendem ficar?',
+        created_at: oneHourAgo,
+      },
+      {
+        id: 'msg_mat_1',
+        conversation_id: 'conv_matheus',
+        sender_type: 'CUSTOMER',
+        sender_id: 'cust_matheus',
+        content: 'Olá, gostaria de saber os valores para Cancún em janeiro para 2 pessoas.',
+        created_at: twoHoursAgo,
+      },
+    ];
+
+    for (const m of seedMsgs) {
+      dbRun(
+        `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, status, created_at)
+         VALUES (?, ?, ?, ?, ?, 'text', ?, 'delivered', ?)`,
+        [m.id, orgId, m.conversation_id, m.sender_type, m.sender_id, m.content, m.created_at]
+      );
+    }
+
+    // 7. Initial Audit Log
     dbRun(
       `INSERT INTO audit_logs (id, organization_id, user_id, action, metadata, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -250,11 +434,11 @@ export async function seedDatabase(): Promise<void> {
         orgId,
         'usr_admin',
         'SYSTEM_INITIALIZED',
-        JSON.stringify({ message: 'Sistema RealizzeTravel inicializado. Pronto para conexão do WhatsApp da agência.' }),
+        JSON.stringify({ message: 'Sistema RealizzeTravel inicializado. Pronto para atendimento.' }),
         now,
       ]
     );
   });
 
-  console.log('✅ Initial database seeded cleanly with staff users and agency configuration.');
+  console.log('✅ Initial database seeded cleanly with staff users, seed conversations, and agency configuration.');
 }
