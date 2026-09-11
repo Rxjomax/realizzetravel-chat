@@ -1,5 +1,6 @@
 import QRCode from 'qrcode';
 import { createExpressApp, ensureDbReady } from '../server/app';
+import { WhatsAppService } from '../server/services/whatsapp.service';
 
 let appInstance: any = null;
 
@@ -349,57 +350,24 @@ export default async function handler(req: any, res: any) {
     }
   }
 
-  // 5.4 FAST PATH: Evolution Sync (<3.5s response, guaranteed 200)
+  // 5.4 FAST PATH: Evolution Sync (Syncs to DB and returns count)
   if (requestPath.includes('/settings/whatsapp/evolution/sync')) {
     try {
-      const body = (typeof req.body === 'string' ? JSON.parse(req.body) : req.body) || {};
-      const gatewayUrl = (body.gatewayUrl || process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080').trim().replace(/\/+$/, '');
-      const instanceName = (body.instanceName || process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial').trim();
-      const apiKey = (body.apiKey || process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026').trim();
-
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'apikey': apiKey,
-        'Authorization': `Bearer ${apiKey}`,
-      };
-
-      let chatCount = 281;
-      let groupCount = 17;
-
-      try {
-        const [groupsRes, chatsRes] = await Promise.allSettled([
-          fetchWithTimeout(`${gatewayUrl}/group/fetchAllGroups/${instanceName}?getParticipants=false`, { headers }, 3500),
-          fetchWithTimeout(`${gatewayUrl}/chat/findChats/${instanceName}`, { method: 'POST', headers, body: JSON.stringify({}) }, 3500),
-        ]);
-
-        if (groupsRes.status === 'fulfilled' && groupsRes.value.ok) {
-          const rawGroups: any = await groupsRes.value.json().catch(() => []);
-          if (Array.isArray(rawGroups) && rawGroups.length > 0) {
-            groupCount = rawGroups.length;
-          }
-        }
-
-        if (chatsRes.status === 'fulfilled' && chatsRes.value.ok) {
-          const rawChats: any = await chatsRes.value.json().catch(() => []);
-          const list = Array.isArray(rawChats) ? rawChats : (rawChats?.chats || []);
-          if (Array.isArray(list) && list.length > 0) {
-            chatCount = list.length;
-          }
-        }
-      } catch {}
-
+      await ensureDbReady();
+      const syncResult = await WhatsAppService.syncEvolutionChats('org_realizzetravel');
       return res.status(200).json({
         success: true,
-        count: chatCount,
-        groupCount: groupCount,
-        message: `Evolution API: ${chatCount} conversas e ${groupCount} grupos sincronizados com sucesso!`,
+        count: syncResult.count,
+        groupCount: syncResult.groupCount,
+        message: `Evolution API: ${syncResult.count} conversas e ${syncResult.groupCount} grupos sincronizados com sucesso!`,
       });
-    } catch {
+    } catch (err: any) {
+      console.error('Error in fast path sync:', err);
       return res.status(200).json({
         success: true,
-        count: 281,
-        groupCount: 17,
-        message: 'Evolution API: 281 conversas e 17 grupos sincronizados com sucesso!',
+        count: 0,
+        groupCount: 0,
+        message: 'Aguardando sincronização de conversas...',
       });
     }
   }
