@@ -80,6 +80,10 @@ export default async function handler(req: any, res: any) {
     return res.status(200).end();
   }
 
+  try {
+    await ensureDbReady();
+  } catch {}
+
   // Auto-register Evolution webhook for the active domain (e.g. Vercel)
   const reqHost = req.headers?.['x-forwarded-host'] || req.headers?.host;
   if (reqHost) {

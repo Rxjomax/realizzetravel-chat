@@ -149,10 +149,15 @@ export class WhatsAppService {
 
   public static getCredentials(organizationId?: string): WhatsAppCredentials {
     const targetOrg = this.resolveOrganizationId(organizationId);
-    const settingRow = dbGet<{ value: string }>(
-      'SELECT value FROM settings WHERE organization_id = ? AND key = ?',
-      [targetOrg, 'whatsapp_config']
-    );
+    let settingRow: { value: string } | null = null;
+    try {
+      settingRow = dbGet<{ value: string }>(
+        'SELECT value FROM settings WHERE organization_id = ? AND key = ?',
+        [targetOrg, 'whatsapp_config']
+      );
+    } catch {
+      // Safe fallback if database is not initialized yet
+    }
 
     if (settingRow && settingRow.value) {
       try {
@@ -220,6 +225,9 @@ export class WhatsAppService {
     text: string,
     organizationId = 'org_realizzetravel'
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    try {
+      await getDatabase();
+    } catch {}
     const creds = this.getCredentials(organizationId);
     let cleanPhone = to.trim();
 

@@ -8,6 +8,7 @@ import { customersRouter } from './routes/customers.routes';
 import { webhookRouter } from './routes/webhook.routes';
 import { settingsRouter } from './routes/settings.routes';
 import { groupsRouter } from './routes/groups.routes';
+import { WhatsAppService } from './services/whatsapp.service';
 
 let dbInitialized = false;
 let initPromise: Promise<void> | null = null;
