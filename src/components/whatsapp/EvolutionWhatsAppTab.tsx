@@ -489,13 +489,10 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
     try {
       setIsSyncing(true);
       setFeedbackMessage(null);
-      const [chatRes, groupRes] = await Promise.allSettled([
-        api.syncEvolutionChats(),
-        api.syncWhatsAppGroups(),
-      ]);
+      const res = await api.syncEvolutionChats();
 
-      const chatCount = chatRes.status === 'fulfilled' && chatRes.value.success ? chatRes.value.count : 0;
-      const groupCount = groupRes.status === 'fulfilled' && groupRes.value.success ? groupRes.value.count : 0;
+      const chatCount = res.count || 0;
+      const groupCount = res.groupCount || 0;
 
       setFeedbackMessage({
         type: 'success',

@@ -1,6 +1,22 @@
 import { dbGet, dbQuery, dbRun, dbTransaction } from '../db/database';
 import { broadcastEvent } from '../realtime/ws';
 
+async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
+  }
+}
+
 export interface WhatsAppCredentials {
   providerType?: 'EVOLUTION_API' | 'META_CLOUD' | 'QR_CODE' | 'Z_API';
   // Meta Cloud API
@@ -1248,7 +1264,7 @@ export class WhatsAppService {
     }
   }
 
-  public static async syncEvolutionChats(organizationId = 'org_realizzetravel'): Promise<{ count: number; chats: any[] }> {
+  public static async syncEvolutionChats(organizationId = 'org_realizzetravel'): Promise<{ count: number; groupCount: number; chats: any[] }> {
     const creds = this.getCredentials(organizationId);
     const baseUrl = (creds.gatewayUrl || process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080').trim().replace(/\/+$/, '');
     const inst = (creds.instanceName && creds.instanceName !== 'realizze-travel') ? creds.instanceName.trim() : (process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial');
@@ -1261,27 +1277,68 @@ export class WhatsAppService {
     };
 
     const now = new Date().toISOString();
-    let totalImported = 0;
+    let importedChats = 0;
+    let importedGroups = 0;
 
     try {
-      // 1. Sync WhatsApp Groups from Evolution API
-      try {
-        await this.syncEvolutionGroups(organizationId);
-      } catch (grpErr) {
-        console.warn('Notice syncing groups during chats sync:', grpErr);
+      // Fetch Chats, Groups and Contacts in parallel with timeout safety
+      const [groupsRes, contactsRes, chatsRes] = await Promise.allSettled([
+        fetchWithTimeout(`${baseUrl}/group/fetchAllGroups/${inst}?getParticipants=false`, { headers }, 10000),
+        fetchWithTimeout(`${baseUrl}/chat/findContacts/${inst}`, { method: 'POST', headers, body: JSON.stringify({}) }, 8000),
+        fetchWithTimeout(`${baseUrl}/chat/findChats/${inst}`, { method: 'POST', headers, body: JSON.stringify({}) }, 8000),
+      ]);
+
+      // 1. Process WhatsApp Groups
+      if (groupsRes.status === 'fulfilled' && groupsRes.value.ok) {
+        try {
+          const rawGroups: any[] = await groupsRes.value.json();
+          if (Array.isArray(rawGroups)) {
+            for (const g of rawGroups) {
+              const gId = g.id || g.jid;
+              if (!gId) continue;
+              const gName = g.subject || g.name || 'Grupo Realizze Travel';
+              const gDesc = g.desc || g.description || 'Grupo oficial de viagens e pacotes';
+              const pCount = Array.isArray(g.participants) ? g.participants.length : (g.size || 1);
+              const avatar = g.pictureUrl || g.avatar || null;
+
+              const existing = dbGet<any>('SELECT id FROM whatsapp_groups WHERE id = ?', [gId]);
+              if (!existing) {
+                dbRun(
+                  `INSERT INTO whatsapp_groups (id, organization_id, name, description, participant_count, avatar, last_message, last_message_at, destination_focus, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  [
+                    gId,
+                    organizationId,
+                    gName,
+                    gDesc,
+                    pCount,
+                    avatar,
+                    'Grupo sincronizado do WhatsApp',
+                    now,
+                    'Pacotes & Destinos',
+                    now,
+                    now,
+                  ]
+                );
+              } else {
+                dbRun(
+                  `UPDATE whatsapp_groups SET name = ?, avatar = COALESCE(?, avatar), participant_count = ?, updated_at = ? WHERE id = ?`,
+                  [gName, avatar, pCount, now, gId]
+                );
+              }
+              importedGroups++;
+            }
+          }
+        } catch (grpErr) {
+          console.warn('Error processing groups:', grpErr);
+        }
       }
 
-      // 2. Sync Contacts from Evolution API
+      // 2. Process Contacts
       const contactsMap = new Map<string, { name: string; avatar: string | null; phone: string }>();
-      try {
-        const contactsRes = await fetch(`${baseUrl}/chat/findContacts/${inst}`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({}),
-        });
-
-        if (contactsRes.ok) {
-          const contactsList: any[] = await contactsRes.json();
+      if (contactsRes.status === 'fulfilled' && contactsRes.value.ok) {
+        try {
+          const contactsList: any[] = await contactsRes.value.json();
           if (Array.isArray(contactsList)) {
             for (const c of contactsList) {
               const remoteJid = c.remoteJid || c.id || '';
@@ -1316,194 +1373,141 @@ export class WhatsAppService {
               }
             }
           }
+        } catch (contactErr) {
+          console.warn('Error processing contacts:', contactErr);
         }
-      } catch (contactErr) {
-        console.warn('Notice during contacts fetch:', contactErr);
       }
 
-      // 3. Sync Active Chats from Evolution API
-      const chatsRes = await fetch(`${baseUrl}/chat/findChats/${inst}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({}),
-      });
-
-      if (!chatsRes.ok) {
-        console.warn('Failed to fetch chats from Evolution API:', chatsRes.status);
-        const count = dbGet<{ count: number }>(
-          'SELECT COUNT(*) as count FROM conversations WHERE organization_id = ?',
-          [organizationId]
-        )?.count || 0;
-        return { count, chats: [] };
+      // 3. Process Active Chats
+      let chatsList: any[] = [];
+      if (chatsRes.status === 'fulfilled' && chatsRes.value.ok) {
+        try {
+          const rawChats: any = await chatsRes.value.json();
+          chatsList = Array.isArray(rawChats) ? rawChats : (rawChats?.chats || []);
+        } catch (chatParseErr) {
+          console.warn('Error parsing chats:', chatParseErr);
+        }
       }
 
-      const chatsList: any[] = await chatsRes.json();
-      if (!Array.isArray(chatsList)) {
-        const count = dbGet<{ count: number }>(
-          'SELECT COUNT(*) as count FROM conversations WHERE organization_id = ?',
-          [organizationId]
-        )?.count || 0;
-        return { count, chats: [] };
-      }
+      if (Array.isArray(chatsList) && chatsList.length > 0) {
+        for (const item of chatsList) {
+          const remoteJid = item.id || item.remoteJid || item.jid || '';
+          if (!remoteJid) continue;
 
-      for (const item of chatsList) {
-        const remoteJid = item.id || item.remoteJid || item.jid || '';
-        if (!remoteJid) continue;
-
-        // Skip groups as they are handled in syncEvolutionGroups
-        if (remoteJid.includes('@g.us')) {
-          totalImported++;
-          continue;
-        }
-
-        const cleanPhone = String(remoteJid).replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
-        const matchedContact = contactsMap.get(cleanPhone) || contactsMap.get(remoteJid);
-        const name = item.name || item.pushName || item.lastMessage?.pushName || matchedContact?.name || `Cliente (${cleanPhone ? cleanPhone.slice(-4) : 'WhatsApp'})`;
-        const avatar = item.profilePicUrl || item.avatar || matchedContact?.avatar || null;
-        const phoneFormatted = cleanPhone.length >= 8 ? `+${cleanPhone}` : (matchedContact?.phone || `+5581${cleanPhone}`);
-        const lastMsgTime = item.conversationTimestamp
-          ? new Date(Number(item.conversationTimestamp) * 1000).toISOString()
-          : (item.updatedAt || now);
-
-        let customer = dbGet<any>(
-          `SELECT * FROM customers 
-           WHERE organization_id = ? 
-             AND (phone = ? OR phone = ? OR REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '') = ?)
-           LIMIT 1`,
-          [organizationId, phoneFormatted, cleanPhone, cleanPhone]
-        );
-
-        if (!customer) {
-          const custId = `cst_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-          const custAvatar = avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=0D9488&color=fff&size=128`;
-          dbRun(
-            `INSERT INTO customers (id, organization_id, name, phone, avatar, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [custId, organizationId, name, phoneFormatted, custAvatar, lastMsgTime, now]
-          );
-          customer = { id: custId, name, phone: phoneFormatted, avatar: custAvatar };
-        }
-
-        let conversation = dbGet<any>(
-          `SELECT * FROM conversations WHERE organization_id = ? AND customer_id = ? AND status != 'CLOSED' ORDER BY created_at DESC LIMIT 1`,
-          [organizationId, customer.id]
-        );
-
-        const convId = conversation ? conversation.id : `cnv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-
-        if (!conversation) {
-          dbRun(
-            `INSERT INTO conversations (id, organization_id, customer_id, status, priority, created_at, updated_at, last_message_at)
-             VALUES (?, ?, ?, 'WAITING', 'MEDIUM', ?, ?, ?)`,
-            [convId, organizationId, customer.id, lastMsgTime, now, lastMsgTime]
-          );
-        } else {
-          dbRun(
-            `UPDATE conversations SET last_message_at = ?, updated_at = ? WHERE id = ?`,
-            [lastMsgTime, now, conversation.id]
-          );
-        }
-
-        // Import chat's last message if present
-        if (item.lastMessage) {
-          const lMsg = item.lastMessage;
-          const isFromMe = lMsg.key?.fromMe === true;
-          const msgContent =
-            lMsg.message?.conversation ||
-            lMsg.message?.extendedTextMessage?.text ||
-            lMsg.message?.imageMessage?.caption ||
-            (lMsg.message?.imageMessage ? '[Foto]' : null) ||
-            (lMsg.message?.audioMessage ? '[Áudio]' : null) ||
-            (lMsg.message?.documentMessage ? '[Documento]' : null) ||
-            lMsg.text ||
-            null;
-          const msgId = lMsg.key?.id || lMsg.id || `msg_init_${Date.now()}`;
-          const msgTime = lMsg.messageTimestamp
-            ? new Date(Number(lMsg.messageTimestamp) * 1000).toISOString()
-            : lastMsgTime;
-
-          if (msgContent) {
-            const exists = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [msgId]);
-            if (!exists) {
-              const localMsgId = `msg_hist_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-              dbRun(
-                `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, whatsapp_message_id, status, created_at)
-                 VALUES (?, ?, ?, ?, ?, 'text', ?, ?, 'delivered', ?)`,
-                [localMsgId, organizationId, convId, isFromMe ? 'AGENT' : 'CUSTOMER', isFromMe ? 'usr_agent' : customer.id, String(msgContent), msgId, msgTime]
-              );
-            }
+          // Skip groups (handled in step 1)
+          if (remoteJid.includes('@g.us') || remoteJid.includes('@broadcast')) {
+            continue;
           }
-        }
 
-        // Fetch recent messages for the top 35 active chats to keep sync fast and responsive
-        if (chatsList.indexOf(item) < 35) {
-          try {
-            const msgResp = await fetch(`${baseUrl}/chat/findMessages/${inst}`, {
-              method: 'POST',
-              headers,
-              body: JSON.stringify({
-                where: {
-                  key: {
-                    remoteJid: remoteJid,
-                  },
-                },
-                limit: 20,
-              }),
-            });
+          const cleanPhone = String(remoteJid).replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
+          const matchedContact = contactsMap.get(cleanPhone) || contactsMap.get(remoteJid);
+          const name = item.name || item.pushName || item.lastMessage?.pushName || matchedContact?.name || `Cliente (${cleanPhone ? cleanPhone.slice(-4) : 'WhatsApp'})`;
+          const avatar = item.profilePicUrl || item.avatar || matchedContact?.avatar || null;
+          const phoneFormatted = cleanPhone.length >= 8 ? `+${cleanPhone}` : (matchedContact?.phone || `+5581${cleanPhone}`);
+          const lastMsgTime = item.conversationTimestamp
+            ? new Date(Number(item.conversationTimestamp) * 1000).toISOString()
+            : (item.updatedAt || now);
 
-            if (msgResp.ok) {
-              const historyData: any = await msgResp.json();
-              const msgsList = historyData?.messages?.records || historyData?.records || (Array.isArray(historyData) ? historyData : []);
-              for (const hMsg of msgsList) {
-                const hKey = hMsg.key || {};
-                const hFromMe = hKey.fromMe === true;
-                const hContent =
-                  hMsg.message?.conversation ||
-                  hMsg.message?.extendedTextMessage?.text ||
-                  hMsg.message?.imageMessage?.caption ||
-                  (hMsg.message?.imageMessage ? '[Foto]' : null) ||
-                  (hMsg.message?.audioMessage ? '[Áudio]' : null) ||
-                  (hMsg.message?.documentMessage ? '[Documento]' : null) ||
-                  hMsg.text ||
-                  null;
-                const hId = hKey.id || hMsg.id;
-                const hTime = hMsg.messageTimestamp
-                  ? new Date(Number(hMsg.messageTimestamp) * 1000).toISOString()
-                  : lastMsgTime;
+          let customer = dbGet<any>(
+            `SELECT * FROM customers 
+             WHERE organization_id = ? 
+               AND (phone = ? OR phone = ? OR REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '') = ?)
+             LIMIT 1`,
+            [organizationId, phoneFormatted, cleanPhone, cleanPhone]
+          );
 
-                if (hContent && hId) {
-                  const existingH = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [hId]);
-                  if (!existingH) {
-                    const localHId = `msg_hist_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-                    dbRun(
-                      `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, whatsapp_message_id, status, created_at)
-                       VALUES (?, ?, ?, ?, ?, 'text', ?, ?, 'delivered', ?)`,
-                      [localHId, organizationId, convId, hFromMe ? 'AGENT' : 'CUSTOMER', hFromMe ? 'usr_agent' : customer.id, String(hContent), hId, hTime]
-                    );
-                  }
-                }
+          if (!customer) {
+            const custId = `cst_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+            const custAvatar = avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=0D9488&color=fff&size=128`;
+            dbRun(
+              `INSERT INTO customers (id, organization_id, name, phone, avatar, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [custId, organizationId, name, phoneFormatted, custAvatar, lastMsgTime, now]
+            );
+            customer = { id: custId, name, phone: phoneFormatted, avatar: custAvatar };
+          } else if (avatar && avatar !== customer.avatar) {
+            dbRun('UPDATE customers SET avatar = ?, updated_at = ? WHERE id = ?', [avatar, now, customer.id]);
+          }
+
+          let conversation = dbGet<any>(
+            `SELECT * FROM conversations WHERE organization_id = ? AND customer_id = ? AND status != 'CLOSED' ORDER BY created_at DESC LIMIT 1`,
+            [organizationId, customer.id]
+          );
+
+          const convId = conversation ? conversation.id : `cnv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+          if (!conversation) {
+            dbRun(
+              `INSERT INTO conversations (id, organization_id, customer_id, status, priority, created_at, updated_at, last_message_at)
+               VALUES (?, ?, ?, 'WAITING', 'MEDIUM', ?, ?, ?)`,
+              [convId, organizationId, customer.id, lastMsgTime, now, lastMsgTime]
+            );
+          } else {
+            dbRun(
+              `UPDATE conversations SET last_message_at = ?, updated_at = ? WHERE id = ?`,
+              [lastMsgTime, now, conversation.id]
+            );
+          }
+
+          // Import chat's latest message
+          if (item.lastMessage) {
+            const lMsg = item.lastMessage;
+            const isFromMe = lMsg.key?.fromMe === true;
+            const msgContent =
+              lMsg.message?.conversation ||
+              lMsg.message?.extendedTextMessage?.text ||
+              lMsg.message?.imageMessage?.caption ||
+              (lMsg.message?.imageMessage ? '[Foto]' : null) ||
+              (lMsg.message?.audioMessage ? '[Áudio]' : null) ||
+              (lMsg.message?.documentMessage ? '[Documento]' : null) ||
+              lMsg.text ||
+              null;
+            const msgId = lMsg.key?.id || lMsg.id || `msg_init_${Date.now()}`;
+            const msgTime = lMsg.messageTimestamp
+              ? new Date(Number(lMsg.messageTimestamp) * 1000).toISOString()
+              : lastMsgTime;
+
+            if (msgContent) {
+              const exists = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [msgId]);
+              if (!exists) {
+                const localMsgId = `msg_hist_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+                dbRun(
+                  `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, whatsapp_message_id, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, 'text', ?, ?, 'delivered', ?)`,
+                  [localMsgId, organizationId, convId, isFromMe ? 'AGENT' : 'CUSTOMER', isFromMe ? 'usr_agent' : customer.id, String(msgContent), msgId, msgTime]
+                );
               }
             }
-          } catch {
-            // ignore single chat history errors
           }
+
+          importedChats++;
         }
-
-        totalImported++;
       }
 
-      if (totalImported > 0) {
-        broadcastEvent('poll:sync', { count: totalImported }, organizationId);
-      }
+      const totalCount = dbGet<{ count: number }>(
+        'SELECT COUNT(*) as count FROM conversations WHERE organization_id = ?',
+        [organizationId]
+      )?.count || importedChats;
 
-      return { count: totalImported, chats: chatsList };
+      const groupTotal = dbGet<{ count: number }>(
+        'SELECT COUNT(*) as count FROM whatsapp_groups WHERE organization_id = ?',
+        [organizationId]
+      )?.count || importedGroups;
+
+      broadcastEvent('poll:sync', { count: totalCount, groupCount: groupTotal }, organizationId);
+
+      return { count: totalCount, groupCount: groupTotal, chats: chatsList };
     } catch (err: any) {
       console.error('Error syncing Evolution API chats:', err);
       const count = dbGet<{ count: number }>(
         'SELECT COUNT(*) as count FROM conversations WHERE organization_id = ?',
         [organizationId]
       )?.count || 0;
-      return { count, chats: [] };
+      const groupCount = dbGet<{ count: number }>(
+        'SELECT COUNT(*) as count FROM whatsapp_groups WHERE organization_id = ?',
+        [organizationId]
+      )?.count || 0;
+      return { count, groupCount, chats: [] };
     }
   }
 

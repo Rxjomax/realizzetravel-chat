@@ -832,15 +832,16 @@ settingsRouter.post('/whatsapp/evolution/configure-webhook', flexibleAuth, async
 // POST /api/settings/whatsapp/evolution/sync - Sync chats from Evolution API
 settingsRouter.post('/whatsapp/evolution/sync', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const orgId = req.user!.organization_id;
+    const orgId = req.user?.organization_id || 'org_realizzetravel';
     const result = await WhatsAppService.syncEvolutionChats(orgId);
     res.json({
       success: true,
       count: result.count,
-      message: `Evolution API: ${result.count} conversas sincronizadas com sucesso!`,
+      groupCount: result.groupCount || 0,
+      message: `Evolution API: ${result.count} conversas e ${result.groupCount || 0} grupos sincronizados com sucesso!`,
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, count: 0, error: err.message || 'Erro ao sincronizar Evolution API.' });
+    res.status(500).json({ success: false, count: 0, groupCount: 0, error: err.message || 'Erro ao sincronizar Evolution API.' });
   }
 });
 

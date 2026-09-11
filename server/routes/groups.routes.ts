@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { dbGet, dbQuery, dbRun, dbTransaction } from '../db/database';
-import { authenticateToken, AuthenticatedRequest } from '../auth/middleware';
+import { authenticateToken, flexibleAuth, AuthenticatedRequest } from '../auth/middleware';
 import { WhatsAppService } from '../services/whatsapp.service';
 import { broadcastEvent } from '../realtime/ws';
 
@@ -262,9 +262,9 @@ groupsRouter.post('/:id/messages', authenticateToken, async (req: AuthenticatedR
 });
 
 // POST /api/whatsapp/groups/sync - Force sync groups from Evolution API
-groupsRouter.post('/sync', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+groupsRouter.post('/sync', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const orgId = req.user!.organization_id;
+    const orgId = req.user?.organization_id || 'org_realizzetravel';
     const syncRes = await WhatsAppService.syncEvolutionGroups(orgId);
 
     res.json({

@@ -1402,7 +1402,7 @@ class ApiService {
     });
   }
 
-  public async syncEvolutionChats(): Promise<{ success: boolean; count: number; message: string }> {
+  public async syncEvolutionChats(): Promise<{ success: boolean; count: number; groupCount?: number; message: string }> {
     return await this.request('/settings/whatsapp/evolution/sync', {
       method: 'POST',
     });
