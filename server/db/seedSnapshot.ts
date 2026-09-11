@@ -1,6 +1,5 @@
-import fs from 'fs';
-import path from 'path';
 import { dbGet, dbRun, dbTransaction } from './database';
+import { SNAPSHOT_CONVERSATIONS, SNAPSHOT_MESSAGES, SNAPSHOT_GROUPS } from '../../src/services/whatsappSnapshotData';
 
 export function seedWhatsAppSnapshot(orgId: string = 'org_realizzetravel'): void {
   try {
@@ -13,47 +12,40 @@ export function seedWhatsAppSnapshot(orgId: string = 'org_realizzetravel'): void
       return;
     }
 
-    const snapshotPath = path.join(__dirname, 'whatsapp_snapshot.json');
-    if (!fs.existsSync(snapshotPath)) {
-      return;
-    }
-
-    const raw = fs.readFileSync(snapshotPath, 'utf8');
-    const data = JSON.parse(raw);
-    const { customers, conversations, messages, groups } = data;
+    const conversations = SNAPSHOT_CONVERSATIONS;
+    const messagesByConv = SNAPSHOT_MESSAGES;
+    const groups = SNAPSHOT_GROUPS;
 
     dbTransaction(() => {
-      // 1. Seed customers
-      if (Array.isArray(customers)) {
-        for (const cust of customers) {
-          dbRun(
-            `INSERT OR REPLACE INTO customers (
-              id, organization_id, name, phone, email, whatsapp_jid,
-              destination_interest, travel_date, passenger_count, budget, notes, avatar, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              cust.id,
-              cust.organization_id || orgId,
-              cust.name || 'Cliente WhatsApp',
-              cust.phone || '',
-              cust.email || null,
-              cust.whatsapp_jid || null,
-              cust.destination_interest || 'Pacote de Viagem',
-              cust.travel_date || null,
-              cust.passenger_count || 2,
-              cust.budget || 'R$ 7.500',
-              cust.notes || null,
-              cust.avatar || null,
-              cust.created_at || new Date().toISOString(),
-              cust.updated_at || new Date().toISOString(),
-            ]
-          );
-        }
-      }
-
-      // 2. Seed conversations
+      // 1. Seed customers & conversations
       if (Array.isArray(conversations)) {
         for (const conv of conversations) {
+          const cust = conv.customer;
+          if (cust) {
+            dbRun(
+              `INSERT OR REPLACE INTO customers (
+                id, organization_id, name, phone, email, whatsapp_jid,
+                destination_interest, travel_date, passenger_count, budget, notes, avatar, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                cust.id,
+                cust.organization_id || orgId,
+                cust.name || 'Cliente WhatsApp',
+                cust.phone || '',
+                cust.email || null,
+                cust.whatsapp_jid || null,
+                cust.destination_interest || 'Pacote de Viagem',
+                cust.travel_date || null,
+                cust.passenger_count || 2,
+                cust.budget || 'R$ 7.500',
+                cust.notes || null,
+                cust.avatar || null,
+                cust.created_at || new Date().toISOString(),
+                cust.updated_at || new Date().toISOString(),
+              ]
+            );
+          }
+
           dbRun(
             `INSERT OR REPLACE INTO conversations (
               id, organization_id, customer_id, assigned_user_id, whatsapp_jid, status, priority,
@@ -78,33 +70,34 @@ export function seedWhatsAppSnapshot(orgId: string = 'org_realizzetravel'): void
               conv.reminder_status || null,
             ]
           );
+
+          // Seed messages for this conversation if any
+          const msgs = messagesByConv[conv.id];
+          if (Array.isArray(msgs)) {
+            for (const msg of msgs) {
+              dbRun(
+                `INSERT OR REPLACE INTO messages (
+                  id, organization_id, conversation_id, sender_type, sender_id, message_type, content, media_url, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  msg.id,
+                  msg.organization_id || orgId,
+                  msg.conversation_id,
+                  msg.sender_type,
+                  msg.sender_id,
+                  msg.message_type || 'text',
+                  msg.content,
+                  msg.media_url || null,
+                  msg.status || 'delivered',
+                  msg.created_at || new Date().toISOString(),
+                ]
+              );
+            }
+          }
         }
       }
 
-      // 3. Seed messages
-      if (Array.isArray(messages)) {
-        for (const msg of messages) {
-          dbRun(
-            `INSERT OR REPLACE INTO messages (
-              id, organization_id, conversation_id, sender_type, sender_id, message_type, content, media_url, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              msg.id,
-              msg.organization_id || orgId,
-              msg.conversation_id,
-              msg.sender_type,
-              msg.sender_id,
-              msg.message_type || 'text',
-              msg.content,
-              msg.media_url || null,
-              msg.status || 'delivered',
-              msg.created_at || new Date().toISOString(),
-            ]
-          );
-        }
-      }
-
-      // 4. Seed groups
+      // 2. Seed groups
       if (Array.isArray(groups)) {
         for (const grp of groups) {
           dbRun(
@@ -128,7 +121,7 @@ export function seedWhatsAppSnapshot(orgId: string = 'org_realizzetravel'): void
       }
     });
 
-    console.log(`✅ Seeded snapshot with ${conversations?.length || 0} conversations and ${customers?.length || 0} customers.`);
+    console.log(`✅ Seeded snapshot with ${conversations?.length || 0} conversations.`);
   } catch (err) {
     console.warn('Notice seeding WhatsApp snapshot:', err);
   }

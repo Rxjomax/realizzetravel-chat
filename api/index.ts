@@ -1,7 +1,9 @@
 import QRCode from 'qrcode';
 import { createExpressApp, ensureDbReady } from '../server/app';
-import { dbGet } from '../server/db/database';
+import { dbGet, dbQuery } from '../server/db/database';
 import { WhatsAppService } from '../server/services/whatsapp.service';
+import { SNAPSHOT_CONVERSATIONS, SNAPSHOT_MESSAGES, SNAPSHOT_GROUPS } from '../src/services/whatsappSnapshotData';
+import { DEMO_USERS } from '../src/services/localFallbackStore';
 
 let appInstance: any = null;
 
@@ -55,6 +57,15 @@ export default async function handler(req: any, res: any) {
   const requestPath = normalizedPath;
   if (req.url && (req.url.startsWith('/api/index') || req.url === '/api')) {
     req.url = normalizedPath;
+  }
+
+  // 1.1 FAST PATH: Health Check
+  if (requestPath.includes('/health') || requestPath.endsWith('/health')) {
+    return res.status(200).json({
+      status: 'ok',
+      service: 'Central WhatsApp Viagens',
+      timestamp: new Date().toISOString(),
+    });
   }
 
   // 2. FAST PATH: Instant Meta Webhook Challenge (<2ms response)
@@ -382,6 +393,18 @@ export default async function handler(req: any, res: any) {
         });
       }
     }
+  }
+
+  // 5.5 FAST PATH: WhatsApp Groups list
+  if (req.method === 'GET' && (requestPath === '/api/groups' || requestPath.endsWith('/groups'))) {
+    try {
+      await ensureDbReady();
+      const groups = dbQuery('SELECT * FROM whatsapp_groups ORDER BY last_message_at DESC');
+      if (groups && groups.length > 0) {
+        return res.status(200).json({ groups });
+      }
+    } catch {}
+    return res.status(200).json({ groups: SNAPSHOT_GROUPS });
   }
 
   // 6. GENERAL EXPRESS APP HANDLER (with URL restoration & strict error catch)

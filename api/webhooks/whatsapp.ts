@@ -8,7 +8,7 @@ export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, apikey'
   );
 
   if (req.method === 'OPTIONS') {
@@ -38,7 +38,7 @@ export default async function handler(req: any, res: any) {
     return res.status(200).json({
       status: 'online',
       message: 'Endpoint do Webhook WhatsApp ativo e pronto para receber notificações da Meta / Evolution API.',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 
@@ -48,18 +48,24 @@ export default async function handler(req: any, res: any) {
       const payload = req.body;
       console.log('📩 WhatsApp Webhook recebido:', JSON.stringify(payload)?.slice(0, 300));
 
-      // Assegura que o banco de dados em memória/tmp esteja pronto
-      await ensureDbReady();
-
-      if (payload) {
-        await WhatsAppService.handleInboundWebhook(payload);
+      try {
+        await ensureDbReady();
+      } catch (dbErr) {
+        console.warn('Notice ensuring DB ready in webhook:', dbErr);
       }
 
-      // Confirmação 200 OK imediata
+      if (payload) {
+        try {
+          await WhatsAppService.handleInboundWebhook(payload);
+        } catch (procErr) {
+          console.error('Error processing inbound webhook payload:', procErr);
+        }
+      }
+
+      // Confirmação 200 OK imediata para a Evolution API / Meta
       return res.status(200).send('EVENT_RECEIVED');
     } catch (err: any) {
-      console.error('Erro ao receber evento do WhatsApp no webhook Vercel:', err);
-      // Sempre retorna 200 para o gateway não ficar reenviando em loop
+      console.error('Erro geral no webhook Vercel:', err);
       return res.status(200).send('EVENT_RECEIVED');
     }
   }

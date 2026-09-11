@@ -41,18 +41,8 @@ export async function getDatabase(): Promise<SqlJsDatabase> {
   // Enable foreign keys
   dbInstance.run('PRAGMA foreign_keys = ON;');
 
-  // Run schema initialization (first check filesystem, then fallback to bundled SCHEMA_SQL)
-  let schemaSql = '';
-  const schemaPath = path.join(process.cwd(), 'server', 'db', 'schema.sql');
-  if (fs.existsSync(schemaPath)) {
-    try {
-      schemaSql = fs.readFileSync(schemaPath, 'utf8');
-    } catch {
-      schemaSql = SCHEMA_SQL;
-    }
-  } else {
-    schemaSql = SCHEMA_SQL;
-  }
+  // Run schema initialization
+  const schemaSql = SCHEMA_SQL;
 
   if (schemaSql) {
     try {
