@@ -808,16 +808,19 @@ settingsRouter.get('/whatsapp/status', flexibleAuth, async (req: AuthenticatedRe
 // POST /api/settings/whatsapp/evolution/configure-webhook - Automatically set webhook on Evolution API
 settingsRouter.post('/whatsapp/evolution/configure-webhook', flexibleAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const orgId = req.user?.organization_id || 'org_realizzetravel';
     const { gatewayUrl, instanceName, apiKey } = req.body;
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-    const host = req.headers['x-forwarded-host'] || req.headers.host;
-    const webhookUrl = `${protocol}://${host}/api/webhooks/whatsapp`;
+    const protocol = req.headers['x-forwarded-proto'] || 'https';
+    const host = req.headers['x-forwarded-host'] || req.headers.host || 'ais-dev-dsj2bcyiveuhjmcpfccuwu-121004865115.us-east5.run.app';
+    const origin = req.headers.origin || (String(host).includes('localhost') ? 'https://ais-dev-dsj2bcyiveuhjmcpfccuwu-121004865115.us-east5.run.app' : `${protocol}://${host}`);
+    const webhookUrl = req.body.webhookUrl || `${String(origin).replace(/\/+$/, '')}/api/webhooks/whatsapp`;
 
     const result = await WhatsAppService.configureEvolutionWebhook({
       gatewayUrl,
       instanceName,
       apiKey,
       webhookUrl,
+      organizationId: orgId,
     });
 
     res.json(result);
