@@ -7,20 +7,44 @@ import { WhatsAppService } from '../services/whatsapp.service';
 export const conversationsRouter = Router();
 
 // GET /api/conversations/metrics/summary - Dashboard metrics
-conversationsRouter.get('/metrics/summary', authenticateToken, (req: AuthenticatedRequest, res: Response): void => {
+conversationsRouter.get('/metrics/summary', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const orgId = req.user!.organization_id;
     const userId = req.user!.id;
 
-    const waitingCount = dbGet<{ count: number }>(
+    let totalCustomersCount = dbGet<{ count: number }>(
+      'SELECT COUNT(*) as count FROM customers WHERE organization_id = ?',
+      [orgId]
+    )?.count || 0;
+
+    let waitingCount = dbGet<{ count: number }>(
       "SELECT COUNT(*) as count FROM conversations WHERE organization_id = ? AND status = 'WAITING'",
       [orgId]
     )?.count || 0;
 
-    const openCount = dbGet<{ count: number }>(
+    let openCount = dbGet<{ count: number }>(
       "SELECT COUNT(*) as count FROM conversations WHERE organization_id = ? AND status IN ('OPEN', 'ASSIGNED')",
       [orgId]
     )?.count || 0;
+
+    // If zero customers and conversations found (fresh Vercel instance), perform fast auto-sync
+    if (totalCustomersCount === 0 && waitingCount === 0 && openCount === 0) {
+      try {
+        await WhatsAppService.syncEvolutionChats(orgId);
+        totalCustomersCount = dbGet<{ count: number }>(
+          'SELECT COUNT(*) as count FROM customers WHERE organization_id = ?',
+          [orgId]
+        )?.count || 0;
+        waitingCount = dbGet<{ count: number }>(
+          "SELECT COUNT(*) as count FROM conversations WHERE organization_id = ? AND status = 'WAITING'",
+          [orgId]
+        )?.count || 0;
+        openCount = dbGet<{ count: number }>(
+          "SELECT COUNT(*) as count FROM conversations WHERE organization_id = ? AND status IN ('OPEN', 'ASSIGNED')",
+          [orgId]
+        )?.count || 0;
+      } catch {}
+    }
 
     const myCount = dbGet<{ count: number }>(
       "SELECT COUNT(*) as count FROM conversations WHERE organization_id = ? AND status IN ('OPEN', 'ASSIGNED') AND assigned_user_id = ?",
@@ -29,11 +53,6 @@ conversationsRouter.get('/metrics/summary', authenticateToken, (req: Authenticat
 
     const closedTodayCount = dbGet<{ count: number }>(
       "SELECT COUNT(*) as count FROM conversations WHERE organization_id = ? AND status = 'CLOSED' AND date(closed_at) = date('now')",
-      [orgId]
-    )?.count || 0;
-
-    const totalCustomersCount = dbGet<{ count: number }>(
-      'SELECT COUNT(*) as count FROM customers WHERE organization_id = ?',
       [orgId]
     )?.count || 0;
 

@@ -1,3 +1,6 @@
+import { ensureDbReady } from '../../server/app';
+import { WhatsAppService } from '../../server/services/whatsapp.service';
+
 export default async function handler(req: any, res: any) {
   // CORS
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -12,7 +15,7 @@ export default async function handler(req: any, res: any) {
     return res.status(200).end();
   }
 
-  // --- 1. VERIFICAÇÃO DO WEBHOOK (GET - META CHALLENGE) ---
+  // --- 1. VERIFICAÇÃO DO WEBHOOK (GET - META / EVOLUTION CHALLENGE) ---
   if (req.method === 'GET') {
     const mode = req.query?.['hub.mode'] || req.query?.mode;
     const token = (req.query?.['hub.verify_token'] || req.query?.verify_token || '').trim();
@@ -34,7 +37,7 @@ export default async function handler(req: any, res: any) {
     // Se for apenas um teste via navegador
     return res.status(200).json({
       status: 'online',
-      message: 'Endpoint do Webhook WhatsApp ativo e pronto para receber notificações da Meta.',
+      message: 'Endpoint do Webhook WhatsApp ativo e pronto para receber notificações da Meta / Evolution API.',
       timestamp: new Date().toISOString()
     });
   }
@@ -45,22 +48,18 @@ export default async function handler(req: any, res: any) {
       const payload = req.body;
       console.log('📩 WhatsApp Webhook recebido:', JSON.stringify(payload)?.slice(0, 300));
 
-      // Tenta processar através da aplicação principal se disponível
-      try {
-        const mod: any = await import('../../server/services/whatsapp.service.js');
-        const service = mod?.WhatsAppService;
-        if (payload && service && typeof service.handleInboundWebhook === 'function') {
-          service.handleInboundWebhook(payload);
-        }
-      } catch (procErr: any) {
-        console.warn('Aviso ao processar webhook via WhatsAppService:', procErr?.message);
+      // Assegura que o banco de dados em memória/tmp esteja pronto
+      await ensureDbReady();
+
+      if (payload) {
+        await WhatsAppService.handleInboundWebhook(payload);
       }
 
-      // A Meta EXIGE que retornemos 200 OK imediatamente para confirmar o recebimento
+      // Confirmação 200 OK imediata
       return res.status(200).send('EVENT_RECEIVED');
     } catch (err: any) {
-      console.error('Erro ao receber evento do WhatsApp:', err);
-      // Sempre retorna 200 para a Meta não ficar reenviando em loop
+      console.error('Erro ao receber evento do WhatsApp no webhook Vercel:', err);
+      // Sempre retorna 200 para o gateway não ficar reenviando em loop
       return res.status(200).send('EVENT_RECEIVED');
     }
   }
