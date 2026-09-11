@@ -403,6 +403,17 @@ class ApiService {
       console.warn('Backend details error:', err);
     }
 
+    this.loadLocalStorageState();
+    const localConv = this.localConversations.find((c) => c.id === id);
+    if (localConv) {
+      return {
+        conversation: localConv,
+        messages: this.localMessages[id] || (localConv.last_message ? [localConv.last_message] : []),
+        events: [],
+        notes: [],
+      };
+    }
+
     return {
       conversation: null as any,
       messages: [],

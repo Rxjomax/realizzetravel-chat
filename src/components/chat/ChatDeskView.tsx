@@ -172,11 +172,18 @@ export const ChatDeskView: React.FC = () => {
   const fetchConversationDetails = useCallback(async (id: string) => {
     try {
       const data = await api.getConversationDetails(id);
+      if (!data || !data.conversation) {
+        setSelectedConv(null);
+        setMessages([]);
+        setEvents([]);
+        setNotes([]);
+        return;
+      }
       setSelectedConv(data.conversation);
       // Deduplicate messages by ID to prevent duplicate key errors
       const seenMsgIds = new Set<string>();
       let msgsList = data.messages || [];
-      if (msgsList.length === 0 && data.conversation?.last_message) {
+      if (msgsList.length === 0 && data.conversation.last_message) {
         msgsList = [data.conversation.last_message];
       }
       const uniqueMsgs = msgsList.filter((m: Message) => {
@@ -186,8 +193,8 @@ export const ChatDeskView: React.FC = () => {
         return true;
       });
       setMessages(uniqueMsgs);
-      setEvents(data.events);
-      setNotes(data.notes);
+      setEvents(data.events || []);
+      setNotes(data.notes || []);
 
       // Pre-fill editable fields
       const cust = data.conversation.customer;
