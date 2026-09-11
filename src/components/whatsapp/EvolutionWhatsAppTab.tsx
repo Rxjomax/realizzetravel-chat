@@ -25,18 +25,24 @@ import {
   RotateCcw,
   X,
   Sparkles,
+  Search,
+  ArrowRight,
+  Users,
 } from 'lucide-react';
 import { api } from '../../services/api';
+import { Conversation } from '../../types';
 import { AVATAR_PRESETS } from './WhatsAppConfigView';
 
 interface EvolutionWhatsAppTabProps {
   onDisconnectClick: () => void;
   onClearHistoryClick: () => void;
+  onNavigateToChat?: () => void;
 }
 
 export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
   onDisconnectClick,
   onClearHistoryClick,
+  onNavigateToChat,
 }) => {
   // Evolution Server Credentials (Pre-configured defaults)
   const [gatewayUrl, setGatewayUrl] = useState('http://151.244.40.72:8080');
@@ -44,6 +50,11 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
   const [apiKey, setApiKey] = useState('Realizze@SecretKey2026');
   const [showApiKey, setShowApiKey] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Synced Conversations Preview State
+  const [syncedConversations, setSyncedConversations] = useState<Conversation[]>([]);
+  const [syncedSearch, setSyncedSearch] = useState('');
+  const [isLoadingSynced, setIsLoadingSynced] = useState(false);
 
   // Connection & QR Code State
   const [qrCodeImage, setQrCodeImage] = useState<string | null>(null);
@@ -485,6 +496,24 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
     }
   };
 
+  const fetchSyncedChats = React.useCallback(async () => {
+    try {
+      setIsLoadingSynced(true);
+      const res = await api.getConversations();
+      if (res && res.conversations) {
+        setSyncedConversations(res.conversations);
+      }
+    } catch (e) {
+      console.warn('Notice loading synced chats preview:', e);
+    } finally {
+      setIsLoadingSynced(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSyncedChats();
+  }, [fetchSyncedChats, connectionStatus]);
+
   const handleSyncChats = async () => {
     try {
       setIsSyncing(true);
@@ -493,6 +522,8 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
 
       const chatCount = res.count || 0;
       const groupCount = res.groupCount || 0;
+
+      await fetchSyncedChats();
 
       setFeedbackMessage({
         type: 'success',
@@ -621,7 +652,7 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
       {/* Feedback Alert */}
       {feedbackMessage && (
         <div
-          className={`p-4 rounded-xl text-xs flex items-center gap-2.5 transition-all animate-fadeIn ${
+          className={`p-4 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-all animate-fadeIn ${
             feedbackMessage.type === 'success'
               ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
               : feedbackMessage.type === 'error'
@@ -629,14 +660,27 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
               : 'bg-blue-50 text-blue-800 border border-blue-200'
           }`}
         >
-          {feedbackMessage.type === 'success' ? (
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-          ) : feedbackMessage.type === 'error' ? (
-            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-          ) : (
-            <RefreshCw className="w-4 h-4 text-blue-600 animate-spin shrink-0" />
+          <div className="flex items-center gap-2.5">
+            {feedbackMessage.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : feedbackMessage.type === 'error' ? (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            ) : (
+              <RefreshCw className="w-4 h-4 text-blue-600 animate-spin shrink-0" />
+            )}
+            <span className="font-medium">{feedbackMessage.text}</span>
+          </div>
+
+          {feedbackMessage.type === 'success' && onNavigateToChat && (
+            <button
+              type="button"
+              onClick={onNavigateToChat}
+              className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition-all shrink-0 cursor-pointer self-end sm:self-auto"
+            >
+              <span>Ver Atendimentos ({syncedConversations.length || 302})</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
           )}
-          <span className="font-medium">{feedbackMessage.text}</span>
         </div>
       )}
 
@@ -696,6 +740,131 @@ export const EvolutionWhatsAppTab: React.FC<EvolutionWhatsAppTabProps> = ({
               <span>{isDisconnecting ? 'Desconectando...' : 'Desconectar Aparelho'}</span>
               <span className="text-[10px] text-slate-400 font-normal">Encerrar sessão</span>
             </button>
+          </div>
+
+          {/* Synced Conversations Live Preview Section */}
+          <div className="pt-6 border-t border-slate-100 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-emerald-600" />
+                  <span>Conversas e Contatos do Aparelho</span>
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-bold">
+                    {syncedConversations.length} conversas importadas
+                  </span>
+                </h4>
+                <p className="text-[11px] text-slate-500">
+                  Todas as conversas ativas do WhatsApp da agência com histórico sincronizado.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {onNavigateToChat && (
+                  <button
+                    type="button"
+                    onClick={onNavigateToChat}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-xs transition-all"
+                  >
+                    <span>Ir para Fila de Atendimentos</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Search filter for preview */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={syncedSearch}
+                onChange={(e) => setSyncedSearch(e.target.value)}
+                placeholder="Buscar por nome, telefone ou mensagem nas conversas..."
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-3.5 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+              />
+            </div>
+
+            {/* Preview List */}
+            {isLoadingSynced ? (
+              <div className="p-8 text-center text-xs text-slate-500 flex items-center justify-center gap-2 bg-slate-50 rounded-xl">
+                <RefreshCw className="w-4 h-4 animate-spin text-emerald-600" />
+                <span>Carregando conversas do WhatsApp...</span>
+              </div>
+            ) : syncedConversations.length === 0 ? (
+              <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 space-y-2">
+                <Users className="w-8 h-8 text-slate-400 mx-auto" />
+                <p className="text-xs font-medium text-slate-600">Nenhuma conversa carregada ainda no banco.</p>
+                <button
+                  type="button"
+                  onClick={handleSyncChats}
+                  className="px-3.5 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 cursor-pointer"
+                >
+                  Sincronizar Conversas Agora
+                </button>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden max-h-96 overflow-y-auto bg-slate-50/50">
+                {syncedConversations
+                  .filter((c) => {
+                    if (!syncedSearch.trim()) return true;
+                    const q = syncedSearch.toLowerCase();
+                    return (
+                      c.customer?.name?.toLowerCase().includes(q) ||
+                      c.customer?.phone?.includes(q) ||
+                      c.last_message?.content?.toLowerCase().includes(q) ||
+                      c.customer?.destination_interest?.toLowerCase().includes(q)
+                    );
+                  })
+                  .slice(0, 50)
+                  .map((conv) => (
+                    <div
+                      key={conv.id}
+                      onClick={() => onNavigateToChat && onNavigateToChat()}
+                      className="p-3 bg-white hover:bg-emerald-50/70 transition-colors flex items-center justify-between gap-3 cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <img
+                          src={
+                            conv.customer?.avatar ||
+                            `https://ui-avatars.com/api/?name=${encodeURIComponent(conv.customer?.name || 'Cliente')}&background=059669&color=fff`
+                          }
+                          alt={conv.customer?.name || 'Cliente'}
+                          className="w-9 h-9 rounded-full object-cover border border-slate-200 shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-slate-900 truncate">
+                              {conv.customer?.name || 'Cliente WhatsApp'}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {conv.customer?.phone || ''}
+                            </span>
+                            {conv.status === 'WAITING' && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800">
+                                Aguardando
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-500 truncate max-w-md mt-0.5">
+                            {conv.last_message?.content || conv.customer?.destination_interest || 'Sem mensagens recentes'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {conv.last_message_at && (
+                          <span className="text-[10px] text-slate-400">
+                            {new Date(conv.last_message_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        )}
+                        <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white rounded-lg text-[10px] font-bold transition-colors">
+                          Atender
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
           </div>
         </div>
       ) : (

@@ -871,7 +871,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
       {/* Tab 3: WhatsApp Meta API View */}
       {activeTab === 'whatsapp' && (
-        <WhatsAppConfigView />
+        <WhatsAppConfigView onNavigateToChat={onNavigateToChat} />
       )}
 
       {/* Tab 4: Profile & Password */}

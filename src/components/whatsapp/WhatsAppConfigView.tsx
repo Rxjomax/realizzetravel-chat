@@ -60,7 +60,11 @@ export const AVATAR_PRESETS = [
   },
 ];
 
-export const WhatsAppConfigView: React.FC = () => {
+interface WhatsAppConfigViewProps {
+  onNavigateToChat?: () => void;
+}
+
+export const WhatsAppConfigView: React.FC<WhatsAppConfigViewProps> = ({ onNavigateToChat }) => {
   // Provider Selection: Default to Evolution API (Pre-configured on VPS)
   const [providerType, setProviderType] = useState<WhatsAppProviderType>('EVOLUTION_API');
 
@@ -424,6 +428,7 @@ export const WhatsAppConfigView: React.FC = () => {
         <EvolutionWhatsAppTab
           onDisconnectClick={() => setIsDisconnectModalOpen(true)}
           onClearHistoryClick={() => setIsClearModalOpen(true)}
+          onNavigateToChat={onNavigateToChat}
         />
       ) : (
         <div className="space-y-8 animate-fadeIn">

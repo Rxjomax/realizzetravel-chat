@@ -234,13 +234,13 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
     const { status, filter, search } = req.query;
     const userId = req.user!.id;
 
-    // Check if we have 0 or very few conversations in DB; if so, trigger WhatsApp sync
-    const totalConvCount = dbGet<{ count: number }>(
-      'SELECT COUNT(*) as count FROM conversations WHERE organization_id = ?',
+    // Check if we have 0 or few WhatsApp chats in DB; if so, trigger WhatsApp sync to load all 302 chats
+    const realWhatsappCount = dbGet<{ count: number }>(
+      "SELECT COUNT(*) as count FROM conversations WHERE (organization_id = ? OR organization_id = 'org_realizzetravel') AND whatsapp_jid IS NOT NULL AND whatsapp_jid != ''",
       [orgId]
     )?.count || 0;
 
-    if (totalConvCount < 3) {
+    if (realWhatsappCount < 10) {
       await WhatsAppService.syncEvolutionChats(orgId).catch(() => {});
     }
 

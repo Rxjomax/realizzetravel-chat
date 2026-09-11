@@ -126,13 +126,13 @@ export const ChatDeskView: React.FC = () => {
   const handleSyncWhatsApp = async () => {
     try {
       setIsSyncingWhatsApp(true);
-      const res = await api.syncZapiChats();
+      const res = await api.syncEvolutionChats();
       await fetchConversations();
       if (selectedConvId) {
         await fetchConversationDetails(selectedConvId);
       }
       if (res && res.count > 0) {
-        setSuccessMessage(`${res.count} conversas sincronizadas com sucesso!`);
+        setSuccessMessage(`${res.count} conversas sincronizadas do WhatsApp com sucesso!`);
         setTimeout(() => setSuccessMessage(null), 4000);
       }
     } catch (e) {
