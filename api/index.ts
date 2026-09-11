@@ -1,6 +1,6 @@
 import QRCode from 'qrcode';
 import { createExpressApp, ensureDbReady } from '../server/app';
-import { dbGet, dbQuery } from '../server/db/database';
+import { dbGet, dbQuery, dbRun } from '../server/db/database';
 import { WhatsAppService } from '../server/services/whatsapp.service';
 import { SNAPSHOT_CONVERSATIONS, SNAPSHOT_MESSAGES, SNAPSHOT_GROUPS } from '../src/services/whatsappSnapshotData';
 import { DEMO_USERS } from '../src/services/localFallbackStore';
@@ -405,6 +405,88 @@ export default async function handler(req: any, res: any) {
       }
     } catch {}
     return res.status(200).json({ groups: SNAPSHOT_GROUPS });
+  }
+
+  // 5.6 FAST PATH: Send Message directly to WhatsApp / Evolution API
+  const msgMatch = requestPath.match(/\/conversations\/([^/?#]+)\/messages/);
+  if (req.method === 'POST' && msgMatch) {
+    const convId = msgMatch[1];
+    let bodyData = req.body;
+    if (typeof bodyData === 'string') {
+      try { bodyData = JSON.parse(bodyData); } catch {}
+    }
+    const content = (bodyData?.content || '').trim();
+    const messageType = bodyData?.messageType || 'text';
+    const mediaUrl = bodyData?.mediaUrl || null;
+
+    if (!content) {
+      return res.status(400).json({ error: 'Conteúdo da mensagem não pode ser vazio.' });
+    }
+
+    try {
+      await ensureDbReady();
+    } catch {}
+
+    const now = new Date().toISOString();
+    const msgId = `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+    // Try finding conversation in DB or Snapshot
+    let targetRecipient: string | null = null;
+    try {
+      const conv = dbGet<any>(
+        'SELECT c.id, c.customer_id, c.assigned_user_id, c.whatsapp_jid, cust.phone FROM conversations c LEFT JOIN customers cust ON c.customer_id = cust.id WHERE c.id = ?',
+        [convId]
+      );
+      if (conv) {
+        targetRecipient = conv.whatsapp_jid || conv.phone;
+      }
+    } catch {}
+
+    if (!targetRecipient) {
+      const snapConv = SNAPSHOT_CONVERSATIONS.find((c: any) => c.id === convId);
+      if (snapConv) {
+        targetRecipient = snapConv.whatsapp_jid || snapConv.customer?.phone;
+      }
+    }
+
+    // Insert into DB if ready
+    try {
+      dbRun(
+        `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, media_url, status, created_at)
+         VALUES (?, ?, ?, 'AGENT', 'usr_admin', ?, ?, ?, 'sent', ?)`,
+        [msgId, 'org_realizzetravel', convId, messageType, content, mediaUrl, now]
+      );
+      dbRun(
+        `UPDATE conversations SET last_message_at = ?, updated_at = ? WHERE id = ?`,
+        [now, now, convId]
+      );
+    } catch {}
+
+    // Send to Evolution API on VPS
+    if (targetRecipient) {
+      try {
+        await WhatsAppService.sendTextMessage(targetRecipient, content, 'org_realizzetravel');
+      } catch (evoErr) {
+        console.warn('Notice sending via Evolution API:', evoErr);
+      }
+    }
+
+    const createdMessage = {
+      id: msgId,
+      organization_id: 'org_realizzetravel',
+      conversation_id: convId,
+      sender_type: 'AGENT',
+      sender_id: 'usr_admin',
+      sender_name: 'Carlos Santos (Administrador)',
+      sender_avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&h=120&fit=crop&crop=face',
+      message_type: messageType,
+      content,
+      media_url: mediaUrl,
+      status: 'sent',
+      created_at: now,
+    };
+
+    return res.status(201).json({ message: createdMessage });
   }
 
   // 6. GENERAL EXPRESS APP HANDLER (with URL restoration & strict error catch)
