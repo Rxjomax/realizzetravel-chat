@@ -1295,6 +1295,40 @@ export class WhatsAppService {
 
       const contactsMap = new Map<string, { name: string; avatar: string | null; phone: string; jid: string }>();
 
+      // Pre-load existing database entities in bulk to eliminate thousands of slow N+1 dbGet queries
+      const existingCustomers = dbQuery<any>(
+        'SELECT id, name, phone, avatar, whatsapp_jid FROM customers WHERE organization_id = ? OR organization_id = "org_realizzetravel"',
+        [organizationId]
+      );
+      const custByJid = new Map<string, any>();
+      const custByPhone = new Map<string, any>();
+      for (const cust of existingCustomers) {
+        if (cust.whatsapp_jid) custByJid.set(cust.whatsapp_jid, cust);
+        if (cust.phone) {
+          const digits = String(cust.phone).replace(/\D/g, '');
+          custByPhone.set(cust.phone, cust);
+          custByPhone.set(digits, cust);
+          custByPhone.set(`+${digits}`, cust);
+        }
+      }
+
+      const existingConversations = dbQuery<any>(
+        'SELECT id, customer_id, whatsapp_jid, assigned_user_id, status FROM conversations WHERE organization_id = ? OR organization_id = "org_realizzetravel"',
+        [organizationId]
+      );
+      const convByJid = new Map<string, any>();
+      const convByCustId = new Map<string, any>();
+      for (const conv of existingConversations) {
+        if (conv.whatsapp_jid) convByJid.set(conv.whatsapp_jid, conv);
+        if (conv.customer_id) convByCustId.set(conv.customer_id, conv);
+      }
+
+      const existingMsgIds = new Set<string>(
+        dbQuery<{ whatsapp_message_id: string }>(
+          'SELECT whatsapp_message_id FROM messages WHERE whatsapp_message_id IS NOT NULL'
+        ).map(m => m.whatsapp_message_id)
+      );
+
       // Wrap all database writes inside a single transaction for 100x speed
       dbTransaction(() => {
         // 1. Process WhatsApp Groups
@@ -1342,7 +1376,7 @@ export class WhatsAppService {
           }
         }
 
-        // 2. Process Contacts (1,600+ real contacts)
+        // 2. Process Contacts (Fast mapping and batch upsert)
         if (contactsRes.status === 'fulfilled' && contactsRes.value.ok) {
           try {
             if (Array.isArray(contactsList)) {
@@ -1363,33 +1397,34 @@ export class WhatsAppService {
                 contactsMap.set(cleanPhone, info);
                 contactsMap.set(remoteJid, info);
 
-                // Upsert customer in database
-                const existingCust = dbGet<any>(
-                  `SELECT id, name, avatar FROM customers 
-                   WHERE organization_id = ? 
-                     AND (phone = ? OR phone = ? OR REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '') = ?)
-                   LIMIT 1`,
-                  [organizationId, `+${cleanPhone}`, cleanPhone, cleanPhone]
-                );
+                // Check in-memory index
+                let existingCust = custByJid.get(remoteJid) || custByPhone.get(cleanPhone) || custByPhone.get(`+${cleanPhone}`);
 
                 if (!existingCust) {
                   const custId = `cst_${Date.now()}_${Math.random().toString(36).substring(7)}`;
                   const custAvatar = cAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(cName)}&background=0D9488&color=fff&size=128`;
                   dbRun(
-                    `INSERT INTO customers (id, organization_id, name, phone, avatar, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                    [custId, organizationId, cName, `+${cleanPhone}`, custAvatar, now, now]
+                    `INSERT INTO customers (id, organization_id, name, phone, avatar, whatsapp_jid, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [custId, organizationId, cName, `+${cleanPhone}`, custAvatar, remoteJid, now, now]
                   );
+                  const newCust = { id: custId, name: cName, phone: `+${cleanPhone}`, avatar: custAvatar, whatsapp_jid: remoteJid };
+                  custByJid.set(remoteJid, newCust);
+                  custByPhone.set(cleanPhone, newCust);
+                  custByPhone.set(`+${cleanPhone}`, newCust);
                 } else {
-                  // Only update avatar if changed; NEVER overwrite existing real customer names with placeholders
                   const isExistingPlaceholder = isPlaceholderCustomerName(existingCust.name);
                   const isNewReal = !isPlaceholderCustomerName(cName) && !cName.startsWith('Cliente (+');
                   if (cAvatar && cAvatar !== existingCust.avatar && isExistingPlaceholder && isNewReal) {
                     dbRun('UPDATE customers SET avatar = ?, name = ?, updated_at = ? WHERE id = ?', [cAvatar, cName, now, existingCust.id]);
+                    existingCust.avatar = cAvatar;
+                    existingCust.name = cName;
                   } else if (cAvatar && cAvatar !== existingCust.avatar) {
                     dbRun('UPDATE customers SET avatar = ?, updated_at = ? WHERE id = ?', [cAvatar, now, existingCust.id]);
+                    existingCust.avatar = cAvatar;
                   } else if (isExistingPlaceholder && isNewReal) {
                     dbRun('UPDATE customers SET name = ?, updated_at = ? WHERE id = ?', [cName, now, existingCust.id]);
+                    existingCust.name = cName;
                   }
                 }
               }
@@ -1499,13 +1534,7 @@ export class WhatsAppService {
               ? new Date(Number(item.conversationTimestamp) * 1000).toISOString()
               : (lMsg?.messageTimestamp ? new Date(Number(lMsg.messageTimestamp) * 1000).toISOString() : (item.updatedAt || now));
 
-            let customer = dbGet<any>(
-              `SELECT * FROM customers 
-               WHERE organization_id = ? 
-                 AND (whatsapp_jid = ? OR phone = ? OR phone = ? OR REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '') = ?)
-               LIMIT 1`,
-              [organizationId, remoteJid, phoneFormatted, cleanPhone, cleanPhone]
-            );
+            let customer = custByJid.get(remoteJid) || custByPhone.get(cleanPhone) || custByPhone.get(phoneFormatted);
 
             if (!customer) {
               const custId = `cst_${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -1516,25 +1545,26 @@ export class WhatsAppService {
                 [custId, organizationId, name, phoneFormatted, custAvatar, remoteJid, lastMsgTime, now]
               );
               customer = { id: custId, name, phone: phoneFormatted, avatar: custAvatar, whatsapp_jid: remoteJid };
+              custByJid.set(remoteJid, customer);
+              custByPhone.set(cleanPhone, customer);
+              custByPhone.set(phoneFormatted, customer);
             } else {
-              // ONLY update customer name if the current name is a placeholder AND the new name is real!
-              // NEVER overwrite an existing real human name!
               if (isPlaceholderCustomerName(customer.name) && !isPlaceholderCustomerName(name)) {
                 dbRun('UPDATE customers SET name = ?, updated_at = ? WHERE id = ?', [name, now, customer.id]);
                 customer.name = name;
               }
               if (avatar && avatar !== customer.avatar) {
                 dbRun('UPDATE customers SET avatar = ?, updated_at = ? WHERE id = ?', [avatar, now, customer.id]);
+                customer.avatar = avatar;
               }
               if (!customer.whatsapp_jid) {
                 dbRun('UPDATE customers SET whatsapp_jid = ? WHERE id = ?', [remoteJid, customer.id]);
+                customer.whatsapp_jid = remoteJid;
+                custByJid.set(remoteJid, customer);
               }
             }
 
-            let conversation = dbGet<any>(
-              `SELECT * FROM conversations WHERE organization_id = ? AND (whatsapp_jid = ? OR customer_id = ?) LIMIT 1`,
-              [organizationId, remoteJid, customer.id]
-            );
+            let conversation = convByJid.get(remoteJid) || convByCustId.get(customer.id);
 
             const convId = conversation ? conversation.id : `cnv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
@@ -1560,10 +1590,10 @@ export class WhatsAppService {
                  VALUES (?, ?, ?, ?, ?, ?, 'MEDIUM', ?, ?, ?)`,
                 [convId, organizationId, customer.id, remoteJid, assignedUserId, status, lastMsgTime, now, lastMsgTime]
               );
+              const newConv = { id: convId, customer_id: customer.id, whatsapp_jid: remoteJid, assigned_user_id: assignedUserId, status };
+              convByJid.set(remoteJid, newConv);
+              convByCustId.set(customer.id, newConv);
             } else {
-              // Stable conversation update: NEVER overwrite assigned_user_id or status for already existing conversations!
-              // This completely eliminates attendant and status flickering!
-              // Also ensure any lingering cuid (cmtw...) is overwritten with the genuine WhatsApp JID!
               dbRun(
                 `UPDATE conversations 
                  SET whatsapp_jid = CASE WHEN (whatsapp_jid IS NULL OR whatsapp_jid LIKE 'cmtw%') THEN ? ELSE whatsapp_jid END, 
@@ -1582,26 +1612,8 @@ export class WhatsAppService {
                 ? new Date(Number(lMsg.messageTimestamp) * 1000).toISOString()
                 : lastMsgTime;
 
-              const exists = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [msgId]);
-              if (!exists) {
-                // If it's an agent message, check if we recently sent it locally without a whatsapp_message_id
-                if (isFromMe) {
-                  const localAgentMsg = dbGet<any>(
-                    `SELECT id FROM messages 
-                     WHERE conversation_id = ? 
-                       AND sender_type = 'AGENT' 
-                       AND (content = ? OR content LIKE ?)
-                       AND datetime(created_at) >= datetime('now', '-5 minutes')
-                     LIMIT 1`,
-                    [convId, String(msgContent), `%${String(msgContent)}%`]
-                  );
-                  if (localAgentMsg) {
-                    dbRun('UPDATE messages SET whatsapp_message_id = ?, status = ? WHERE id = ?', [msgId, 'delivered', localAgentMsg.id]);
-                    importedChats++;
-                    continue;
-                  }
-                }
-
+              if (!existingMsgIds.has(msgId)) {
+                existingMsgIds.add(msgId);
                 const localMsgId = `msg_hist_${Date.now()}_${Math.random().toString(36).substring(7)}`;
                 const senderId = isFromMe ? (assignedUserId || 'usr_joao') : customer.id;
                 dbRun(
@@ -1647,66 +1659,69 @@ export class WhatsAppService {
         } catch {}
       });
 
-      // 5. Batch fetch full real message history for top 30 active chats
+      // 5. Concurrent batch fetch full real message history for top 15 active chats
       if (Array.isArray(chatsList) && chatsList.length > 0) {
-        const topChatsToFetch = chatsList.filter(c => c.id || c.remoteJid).slice(0, 30);
-        for (const tc of topChatsToFetch) {
-          const jid = tc.id || tc.remoteJid || '';
-          if (!jid) continue;
-          try {
-            const mRes = await fetchWithTimeout(`${baseUrl}/chat/findMessages/${inst}`, {
-              method: 'POST',
-              headers,
-              body: JSON.stringify({
-                where: { key: { remoteJid: jid } },
-                limit: 35,
-              }),
-            }, 3000);
+        const topChatsToFetch = chatsList.filter(c => c.id || c.remoteJid).slice(0, 15);
+        
+        await Promise.allSettled(
+          topChatsToFetch.map(async (tc) => {
+            const jid = tc.id || tc.remoteJid || '';
+            if (!jid) return;
+            try {
+              const mRes = await fetchWithTimeout(`${baseUrl}/chat/findMessages/${inst}`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  where: { key: { remoteJid: jid } },
+                  limit: 25,
+                }),
+              }, 2200);
 
-            if (mRes.ok) {
-              const mData = await mRes.json().catch(() => ({}));
-              const records = mData?.messages?.records || (Array.isArray(mData) ? mData : []);
-              if (Array.isArray(records) && records.length > 0) {
-                const conv = dbGet<any>(
-                  `SELECT id, customer_id, assigned_user_id FROM conversations WHERE organization_id = ? AND whatsapp_jid = ? LIMIT 1`,
-                  [organizationId, jid]
-                );
+              if (mRes.ok) {
+                const mData = await mRes.json().catch(() => ({}));
+                const records = mData?.messages?.records || (Array.isArray(mData) ? mData : []);
+                if (Array.isArray(records) && records.length > 0) {
+                  const conv = dbGet<any>(
+                    `SELECT id, customer_id, assigned_user_id FROM conversations WHERE (organization_id = ? OR organization_id = 'org_realizzetravel') AND whatsapp_jid = ? LIMIT 1`,
+                    [organizationId, jid]
+                  );
 
-                if (conv) {
-                  for (const r of records) {
-                    const rContent =
-                      r.message?.conversation ||
-                      r.message?.extendedTextMessage?.text ||
-                      r.message?.imageMessage?.caption ||
-                      (r.message?.imageMessage ? '[Foto]' : null) ||
-                      (r.message?.audioMessage ? '[Áudio]' : null) ||
-                      (r.message?.documentMessage ? (r.message?.documentMessage?.fileName || '[Documento]') : null) ||
-                      (r.message?.videoMessage ? '[Vídeo]' : null) ||
-                      (r.message?.stickerMessage ? '[Figurinha]' : null) ||
-                      null;
-                    const rId = r.key?.id || r.id;
-                    if (!rContent || !rId) continue;
-                    const rIsFromMe = r.key?.fromMe === true;
-                    const rTime = r.messageTimestamp
-                      ? new Date(Number(r.messageTimestamp) * 1000).toISOString()
-                      : now;
+                  if (conv) {
+                    for (const r of records) {
+                      const rContent =
+                        r.message?.conversation ||
+                        r.message?.extendedTextMessage?.text ||
+                        r.message?.imageMessage?.caption ||
+                        (r.message?.imageMessage ? '[Foto]' : null) ||
+                        (r.message?.audioMessage ? '[Áudio]' : null) ||
+                        (r.message?.documentMessage ? (r.message?.documentMessage?.fileName || '[Documento]') : null) ||
+                        (r.message?.videoMessage ? '[Vídeo]' : null) ||
+                        (r.message?.stickerMessage ? '[Figurinha]' : null) ||
+                        null;
+                      const rId = r.key?.id || r.id;
+                      if (!rContent || !rId) continue;
+                      const rIsFromMe = r.key?.fromMe === true;
+                      const rTime = r.messageTimestamp
+                        ? new Date(Number(r.messageTimestamp) * 1000).toISOString()
+                        : now;
 
-                    const msgExists = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [rId]);
-                    if (!msgExists) {
-                      const newLocalId = `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-                      const sId = rIsFromMe ? (conv.assigned_user_id || 'usr_joao') : conv.customer_id;
-                      dbRun(
-                        `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, whatsapp_message_id, status, created_at)
-                         VALUES (?, ?, ?, ?, ?, 'text', ?, ?, 'delivered', ?)`,
-                        [newLocalId, organizationId, conv.id, rIsFromMe ? 'AGENT' : 'CUSTOMER', sId, String(rContent), rId, rTime]
-                      );
+                      const msgExists = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [rId]);
+                      if (!msgExists) {
+                        const newLocalId = `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+                        const sId = rIsFromMe ? (conv.assigned_user_id || 'usr_joao') : conv.customer_id;
+                        dbRun(
+                          `INSERT INTO messages (id, organization_id, conversation_id, sender_type, sender_id, message_type, content, whatsapp_message_id, status, created_at)
+                           VALUES (?, ?, ?, ?, ?, 'text', ?, ?, 'delivered', ?)`,
+                          [newLocalId, organizationId, conv.id, rIsFromMe ? 'AGENT' : 'CUSTOMER', sId, String(rContent), rId, rTime]
+                        );
+                      }
                     }
                   }
                 }
               }
-            }
-          } catch {}
-        }
+            } catch {}
+          })
+        );
       }
 
       const totalCount = dbGet<{ count: number }>(
