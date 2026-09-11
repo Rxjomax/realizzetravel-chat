@@ -6,6 +6,50 @@ import { SNAPSHOT_CONVERSATIONS, SNAPSHOT_MESSAGES, SNAPSHOT_GROUPS } from '../s
 import { DEMO_USERS } from '../src/services/localFallbackStore';
 
 let appInstance: any = null;
+let lastRegisteredWebhookHost = '';
+let lastWebhookRegisterTime = 0;
+
+async function autoRegisterWebhookForHost(host: string) {
+  if (!host || host.includes('localhost') || host.includes('127.0.0.1')) return;
+  const now = Date.now();
+  if (lastRegisteredWebhookHost === host && now - lastWebhookRegisterTime < 600000) {
+    return;
+  }
+  lastRegisteredWebhookHost = host;
+  lastWebhookRegisterTime = now;
+
+  try {
+    const gatewayUrl = (process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080').trim().replace(/\/+$/, '');
+    const instanceName = (process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial').trim();
+    const apiKey = (process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026').trim();
+    const webhookUrl = `https://${host}/api/webhooks/whatsapp`;
+
+    const payload = {
+      webhook: {
+        enabled: true,
+        url: webhookUrl,
+        webhookByEvents: false,
+        events: [
+          'MESSAGES_UPSERT',
+          'MESSAGES_UPDATE',
+          'CONNECTION_UPDATE',
+          'QRCODE_UPDATED',
+          'SEND_MESSAGE',
+        ],
+      },
+    };
+
+    await fetchWithTimeout(`${gatewayUrl}/webhook/set/${instanceName}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': apiKey,
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+    }, 2500);
+  } catch {}
+}
 
 function getApp() {
   if (!appInstance) {
@@ -34,6 +78,12 @@ export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, apikey');
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
+  }
+
+  // Auto-register Evolution webhook for the active domain (e.g. Vercel)
+  const reqHost = req.headers?.['x-forwarded-host'] || req.headers?.host;
+  if (reqHost) {
+    autoRegisterWebhookForHost(String(reqHost)).catch(() => {});
   }
 
   const rawUrl = req.url || '';
@@ -516,6 +566,13 @@ export default async function handler(req: any, res: any) {
     await ensureDbReady();
   } catch (err: any) {
     console.warn('ensureDbReady notice:', err?.message || err);
+  }
+
+  // Synchronize recent WhatsApp messages on Vercel when viewing/fetching conversations
+  if (req.method === 'GET' && requestPath.includes('/conversations')) {
+    try {
+      await WhatsAppService.pollRecentEvolutionMessages('org_realizzetravel');
+    } catch {}
   }
 
   // Fix req.url so Express router matching works seamlessly on Vercel

@@ -19,6 +19,9 @@ export async function ensureDbReady(): Promise<void> {
       try {
         await getDatabase();
         await seedDatabase();
+        try {
+          WhatsAppService.startAutoSyncWorker(15000);
+        } catch {}
         dbInitialized = true;
       } catch (err: any) {
         console.error('ensureDbReady initialization error:', err);
