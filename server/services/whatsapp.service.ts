@@ -403,164 +403,87 @@ export class WhatsAppService {
       return;
     }
 
-    // Z-API specific on-message payload & general webhook message payloads
-    const rawPhone = body.phone || body.senderPhone || body.from || body.chatId || data?.phone || data?.from || data?.remoteJid || data?.key?.remoteJid;
-    const isFromMe = body.fromMe === true || body.isMyMessage === true || data?.key?.fromMe === true;
-    const isGroupMsg = body.isGroup === true || String(rawPhone || '').includes('-') || String(rawPhone || '').endsWith('@g.us');
+    // Process array of messages from Evolution API (MESSAGES_UPSERT with data.messages array)
+    const rawMessagesList = Array.isArray(data?.messages)
+      ? data.messages
+      : Array.isArray(body?.messages)
+      ? body.messages
+      : [data || body];
 
-    // Handle group messages (Z-API or Evolution API)
-    if (isGroupMsg) {
-      const groupId = String(rawPhone || data?.key?.remoteJid || body.chatId || '');
-      const pushName = body.senderName || body.pushName || data?.pushName || 'Participante do Grupo';
-      const senderPhone = body.participantPhone || (data?.key?.participant ? String(data.key.participant).replace(/\D/g, '') : undefined);
-      let groupMsgText = '';
-      if (typeof body.text === 'string' && body.text.trim()) groupMsgText = body.text.trim();
-      else if (body.text?.message) groupMsgText = body.text.message;
-      else if (typeof body.message === 'string') groupMsgText = body.message;
-      else if (body.message?.conversation) groupMsgText = body.message.conversation;
-      else if (body.message?.extendedTextMessage?.text) groupMsgText = body.message.extendedTextMessage.text;
-      else if (data?.message?.conversation) groupMsgText = data.message.conversation;
-      else if (data?.message?.extendedTextMessage?.text) groupMsgText = data.message.extendedTextMessage.text;
-      else if (data?.message?.imageMessage?.caption) groupMsgText = `[Foto] ${data.message.imageMessage.caption}`;
-      else if (data?.message?.imageMessage) groupMsgText = '[Foto]';
-      else if (data?.message?.audioMessage) groupMsgText = '[Áudio]';
-      else if (data?.message?.documentMessage) groupMsgText = '[Documento]';
-      else groupMsgText = 'Mensagem de grupo';
+    for (const item of rawMessagesList) {
+      if (!item) continue;
+      const key = item.key || {};
+      const remoteJid = key.remoteJid || item.phone || item.senderPhone || item.from || item.chatId || item.remoteJid || '';
+      if (!remoteJid || remoteJid.includes('@broadcast')) continue;
 
-      if (groupId && groupMsgText) {
+      const isFromMe = item.fromMe === true || item.isMyMessage === true || key.fromMe === true;
+      const isGroupMsg = item.isGroup === true || remoteJid.includes('@g.us') || String(remoteJid).includes('-');
+
+      // Extract message text / content
+      let msgText = '';
+      if (typeof item.text === 'string' && item.text.trim()) msgText = item.text.trim();
+      else if (item.text?.message) msgText = item.text.message;
+      else if (typeof item.message === 'string' && item.message.trim()) msgText = item.message.trim();
+      else if (item.message?.conversation) msgText = item.message.conversation;
+      else if (item.message?.extendedTextMessage?.text) msgText = item.message.extendedTextMessage.text;
+      else if (item.body) msgText = String(item.body);
+      else if (item.caption) msgText = String(item.caption);
+      else if (item.image || item.message?.imageMessage) msgText = item.image?.caption || item.message?.imageMessage?.caption || '[Foto]';
+      else if (item.document || item.message?.documentMessage) msgText = item.document?.fileName ? `[Documento: ${item.document.fileName}]` : '[Documento]';
+      else if (item.audio || item.message?.audioMessage) msgText = '[Áudio]';
+      else if (item.video || item.message?.videoMessage) msgText = '[Vídeo]';
+      else if (item.location) msgText = '[Localização]';
+      else if (item.contact || item.contacts) msgText = '[Contato compartilhado]';
+      else msgText = 'Mensagem recebida';
+
+      if (!msgText || !msgText.trim()) continue;
+
+      if (isGroupMsg) {
+        const pushName = item.senderName || item.pushName || 'Participante do Grupo';
+        const senderPhone = item.participantPhone || (key.participant ? String(key.participant).replace(/\D/g, '') : undefined);
         this.processInboundGroupMessage({
           organizationId: targetOrg,
-          groupId,
+          groupId: remoteJid,
           senderName: pushName,
           senderPhone,
-          content: groupMsgText,
+          content: msgText,
           isFromAgency: isFromMe,
         });
+        continue;
       }
-      return;
-    }
 
-    if (rawPhone && !isGroupMsg) {
-      const cleanPhone = String(rawPhone).replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
-      if (cleanPhone && cleanPhone.length >= 8) {
-        const senderName = isFromMe
-          ? (body.senderName || 'Atendente (WhatsApp)')
-          : (body.senderName ||
-             body.pushName ||
-             body.chatName ||
-             data?.pushName ||
+      const cleanPhone = String(remoteJid).replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
+      if (cleanPhone && cleanPhone.length >= 6) {
+        const pushName = isFromMe
+          ? (item.senderName || 'Atendente (WhatsApp)')
+          : (item.senderName ||
+             item.pushName ||
+             item.chatName ||
              `Cliente WhatsApp (${cleanPhone.slice(-4)})`);
 
-        // Extract message text / content
-        let msgText = '';
-        if (typeof body.text === 'string' && body.text.trim()) {
-          msgText = body.text.trim();
-        } else if (body.text?.message) {
-          msgText = body.text.message;
-        } else if (typeof body.message === 'string' && body.message.trim()) {
-          msgText = body.message.trim();
-        } else if (body.message?.conversation) {
-          msgText = body.message.conversation;
-        } else if (body.message?.extendedTextMessage?.text) {
-          msgText = body.message.extendedTextMessage.text;
-        } else if (data?.message?.conversation) {
-          msgText = data.message.conversation;
-        } else if (data?.message?.extendedTextMessage?.text) {
-          msgText = data.message.extendedTextMessage.text;
-        } else if (body.body) {
-          msgText = String(body.body);
-        } else if (body.caption) {
-          msgText = String(body.caption);
-        } else if (body.image || data?.message?.imageMessage) {
-          msgText = body.image?.caption || data?.message?.imageMessage?.caption || '[Foto]';
-        } else if (body.document || data?.message?.documentMessage) {
-          msgText = body.document?.fileName ? `[Documento: ${body.document.fileName}]` : '[Documento]';
-        } else if (body.audio || data?.message?.audioMessage) {
-          msgText = '[Áudio]';
-        } else if (body.video || data?.message?.videoMessage) {
-          msgText = '[Vídeo]';
-        } else if (body.location) {
-          msgText = '[Localização]';
-        } else if (body.contact || body.contacts) {
-          msgText = '[Contato compartilhado]';
-        } else {
-          msgText = 'Mensagem recebida';
-        }
+        const msgType = (item.image || item.message?.imageMessage)
+          ? 'image'
+          : (item.document || item.message?.documentMessage)
+          ? 'document'
+          : (item.audio || item.message?.audioMessage)
+          ? 'audio'
+          : 'text';
+        const mediaUrl = item.image?.imageUrl || item.document?.documentUrl || item.audio?.audioUrl || null;
+        const msgId = item.messageId || item.zaapId || item.id || key.id || `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
-        if (!msgText || !msgText.trim()) {
-          return;
-        }
-
-        const msgType = (body.image || data?.message?.imageMessage) ? 'image' : (body.document || data?.message?.documentMessage) ? 'document' : (body.audio || data?.message?.audioMessage) ? 'audio' : 'text';
-        const mediaUrl = body.image?.imageUrl || body.document?.documentUrl || body.audio?.audioUrl || null;
-        const msgId = body.messageId || body.zaapId || body.id || data?.key?.id || `msg_${Date.now()}`;
-
-        console.log(`💬 Processando mensagem ${isFromMe ? 'enviada (atendente)' : 'recebida (cliente)'} +${cleanPhone}: "${msgText}"`);
+        console.log(`💬 Inbound Webhook: Mensagem ${isFromMe ? 'enviada (atendente)' : 'recebida (cliente)'} +${cleanPhone}: "${msgText}"`);
 
         this.processInboundMessage({
           organizationId: targetOrg,
           phone: `+${cleanPhone}`,
-          name: senderName,
+          name: pushName,
           content: String(msgText),
           messageType: msgType,
           mediaUrl,
           whatsappMessageId: msgId,
           senderType: isFromMe ? 'AGENT' : 'CUSTOMER',
         });
-        return;
       }
-    }
-
-    // Generic QR Code / Evolution API Inbound Message
-    if (
-      event === 'messages.upsert' ||
-      event === 'MESSAGES_UPSERT' ||
-      event === 'onmessage' ||
-      body.message ||
-      (data.key && !data.key.fromMe)
-    ) {
-      const key = data.key || body.key || {};
-      const remoteJid = key.remoteJid || body.phone || body.from || '';
-
-      const msgContent =
-        data.message?.conversation ||
-        data.message?.extendedTextMessage?.text ||
-        data.message?.imageMessage?.caption ||
-        (data.message?.imageMessage ? '[Foto]' : null) ||
-        (data.message?.audioMessage ? '[Áudio]' : null) ||
-        (data.message?.documentMessage ? '[Documento]' : null) ||
-        body.text ||
-        body.message ||
-        'Mensagem recebida';
-
-      if (remoteJid.includes('@g.us')) {
-        const pushName = data.pushName || body.pushName || body.senderName || 'Participante do Grupo';
-        this.processInboundGroupMessage({
-          organizationId: targetOrg,
-          groupId: remoteJid,
-          senderName: pushName,
-          senderPhone: key.participant ? String(key.participant).replace(/\D/g, '') : undefined,
-          content: String(msgContent),
-          isFromAgency: key.fromMe === true,
-        });
-        return;
-      }
-
-      if (key.fromMe) return; // Skip attendant's own outgoing echo for direct messages
-
-      const cleanPhone = remoteJid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
-      if (!cleanPhone) return;
-
-      const pushName = data.pushName || body.pushName || body.senderName || `Cliente WhatsApp (${cleanPhone.slice(-4)})`;
-
-      this.processInboundMessage({
-        organizationId: targetOrg,
-        phone: `+${cleanPhone}`,
-        name: pushName,
-        content: String(msgContent),
-        messageType: 'text',
-        whatsappMessageId: key.id || `qr_in_${Date.now()}`,
-      });
     }
   }
 
@@ -1522,7 +1445,27 @@ export class WhatsAppService {
         }
       }
 
-      // 4. Batch fetch real recent messages for the top 20 active chats
+      // 4. Ensure EVERY imported customer in customers table has a conversation record in conversations table
+      const customersWithoutConv = dbQuery<{ id: string; created_at: string }>(
+        `SELECT c.id, c.created_at FROM customers c
+         WHERE (c.organization_id = ? OR c.organization_id = 'org_realizzetravel' OR c.organization_id = 'org_voolivre')
+           AND NOT EXISTS (
+             SELECT 1 FROM conversations conv WHERE conv.customer_id = c.id
+           )`,
+        [organizationId]
+      );
+
+      for (const cust of customersWithoutConv) {
+        const cConvId = `cnv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        const cTime = cust.created_at || now;
+        dbRun(
+          `INSERT INTO conversations (id, organization_id, customer_id, status, priority, created_at, updated_at, last_message_at)
+           VALUES (?, ?, ?, 'WAITING', 'MEDIUM', ?, ?, ?)`,
+          [cConvId, organizationId, cust.id, cTime, now, cTime]
+        );
+      }
+
+      // 5. Batch fetch real recent messages for the top 20 active chats
       if (Array.isArray(chatsList) && chatsList.length > 0) {
         const topChats = chatsList.slice(0, 20);
         for (const tc of topChats) {

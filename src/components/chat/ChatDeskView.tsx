@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { extractTravelParameters, hasExtractedAnyInfo, parseBudgetValue } from '../../utils/travelExtractor';
 import { formatPhoneNumber } from '../../utils/formatters';
+import { playNotificationSound } from '../../services/sound';
 
 export function extractConsultantName(fullName?: string): string {
   if (!fullName) return 'Atendente';
@@ -261,6 +262,7 @@ export const ChatDeskView: React.FC = () => {
   // Realtime listeners
   useEffect(() => {
     const unbindCreated = socketClient.on('conversation:created', () => {
+      playNotificationSound('new_ticket');
       fetchConversations();
     });
 
@@ -272,6 +274,9 @@ export const ChatDeskView: React.FC = () => {
     });
 
     const unbindNewMsg = socketClient.on('message:new', (payload) => {
+      if (payload?.message?.sender_type === 'CUSTOMER') {
+        playNotificationSound('message');
+      }
       if (selectedConvId === payload.conversationId) {
         setMessages((prev) => {
           if (prev.some((m) => m.id === payload.message.id)) return prev;

@@ -580,6 +580,10 @@ conversationsRouter.post('/:id/messages', authenticateToken, (req: Authenticated
     const now = new Date().toISOString();
     const msgId = `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
+    const senderUser = dbGet<{ name: string; avatar: string }>('SELECT name, avatar FROM users WHERE id = ?', [userId]);
+    const isNewAssignment = !conv.assigned_user_id;
+    const assignedUser = conv.assigned_user_id || userId;
+
     dbTransaction(() => {
       // Insert message
       dbRun(
@@ -588,16 +592,14 @@ conversationsRouter.post('/:id/messages', authenticateToken, (req: Authenticated
         [msgId, orgId, convId, 'AGENT', userId, messageType, content.trim(), mediaUrl || null, 'sent', now]
       );
 
-      // Update conversation last_message_at and status if needed
+      // Update conversation last_message_at, assigned_user_id and status
       dbRun(
         `UPDATE conversations
-         SET last_message_at = ?, updated_at = ?, status = CASE WHEN status = 'WAITING' THEN 'OPEN' ELSE status END
+         SET last_message_at = ?, updated_at = ?, assigned_user_id = ?, status = CASE WHEN status = 'WAITING' THEN 'OPEN' ELSE status END
          WHERE id = ?`,
-        [now, now, convId]
+        [now, now, assignedUser, convId]
       );
     });
-
-    const senderUser = dbGet<{ name: string; avatar: string }>('SELECT name, avatar FROM users WHERE id = ?', [userId]);
 
     const createdMessage = {
       id: msgId,
@@ -619,6 +621,16 @@ conversationsRouter.post('/:id/messages', authenticateToken, (req: Authenticated
       conversationId: convId,
       message: createdMessage,
     }, orgId);
+
+    if (isNewAssignment) {
+      broadcastEvent('conversation:assigned', {
+        conversationId: convId,
+        assignedUserId: userId,
+        assignedUserName: senderUser?.name || req.user!.name,
+        status: 'OPEN',
+        updatedAt: now,
+      }, orgId);
+    }
 
     // Send to WhatsApp via active integration (Meta Cloud API or QR Code Gateway)
     if (conv?.phone) {
