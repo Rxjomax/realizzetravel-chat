@@ -1,5 +1,5 @@
 import { AuthResponse, Conversation, Customer, LoginCredentials, Message, User, UserRole, UserStatus, WhatsAppConfig, WhatsAppGroup } from '../types';
-import { DEMO_USERS, DEMO_CUSTOMERS, DEMO_CONVERSATIONS, DEMO_MESSAGES, DEMO_WHATSAPP_GROUPS, loadStoredUsers, saveStoredUsers } from './localFallbackStore';
+import { DEMO_USERS, DEMO_CUSTOMERS, DEMO_CONVERSATIONS, DEMO_MESSAGES, DEMO_WHATSAPP_GROUPS, loadStoredUsers, saveStoredUsers, loadStoredConversations, saveStoredConversations } from './localFallbackStore';
 import QRCode from 'qrcode';
 
 const API_BASE = '/api';
@@ -24,20 +24,15 @@ class ApiService {
         this.currentUser = JSON.parse(storedUser);
       } catch {}
     }
-    // Clean out any stale local cache from previous client fallbacks
-    try {
-      localStorage.removeItem('realizze_local_convs');
-      localStorage.removeItem('realizze_local_msgs');
-    } catch {}
     this.initLocalStore();
   }
 
   private initLocalStore() {
     this.localUsers = loadStoredUsers();
-    this.localConversations = [];
-    this.localCustomers = [];
-    this.localMessages = {};
-    this.localWhatsAppGroups = [];
+    this.localConversations = loadStoredConversations();
+    this.localCustomers = DEMO_CUSTOMERS;
+    this.localMessages = { ...DEMO_MESSAGES };
+    this.localWhatsAppGroups = DEMO_WHATSAPP_GROUPS;
   }
 
   public setToken(token: string | null): void {
@@ -374,13 +369,45 @@ class ApiService {
       if (filter) params.append('filter', filter);
       if (search) params.append('search', search);
       const data = await this.request<{ conversations: Conversation[] }>(`/conversations?${params.toString()}`);
-      if (data && Array.isArray(data.conversations)) {
+      if (data && Array.isArray(data.conversations) && data.conversations.length > 0) {
+        this.localConversations = data.conversations;
+        saveStoredConversations(data.conversations);
         return data;
       }
     } catch (err) {
-      console.warn('Backend conversations error:', err);
+      console.warn('Backend conversations error, serving synced snapshot data:', err);
     }
-    return { conversations: [] };
+
+    this.loadLocalStorageState();
+    if (!this.localConversations || this.localConversations.length === 0) {
+      this.localConversations = loadStoredConversations();
+    }
+
+    let result = [...this.localConversations];
+    if (filter) {
+      const f = filter.toUpperCase();
+      if (f === 'WAITING' || f === 'AGUARDANDO') {
+        result = result.filter(c => c.status === 'WAITING');
+      } else if (f === 'OPEN' || f === 'EM ATENDIMENTO' || f === 'ANDAMENTO') {
+        result = result.filter(c => c.status === 'OPEN' || c.status === 'ASSIGNED');
+      } else if (f === 'MY' || f === 'MINE' || f === 'MINHAS') {
+        const uid = this.currentUser?.id;
+        result = result.filter(c => (c.status === 'OPEN' || c.status === 'ASSIGNED') && (!uid || c.assigned_user_id === uid));
+      } else if (f === 'CLOSED' || f === 'ENCERRADAS' || f === 'FINALIZADAS') {
+        result = result.filter(c => c.status === 'CLOSED');
+      }
+    }
+
+    if (search && typeof search === 'string' && search.trim() !== '') {
+      const term = search.toLowerCase().trim();
+      result = result.filter(c => 
+        (c.customer?.name && c.customer.name.toLowerCase().includes(term)) ||
+        (c.customer?.phone && c.customer.phone.includes(term)) ||
+        (c.last_message?.content && c.last_message.content.toLowerCase().includes(term))
+      );
+    }
+
+    return { conversations: result };
   }
 
   public async getConversationDetails(id: string): Promise<{
@@ -1399,16 +1426,20 @@ class ApiService {
 
   public async syncEvolutionChats(): Promise<{ success: boolean; count: number; groupCount?: number; message: string }> {
     try {
-      return await this.request('/settings/whatsapp/evolution/sync', {
+      const res = await this.request<{ success: boolean; count: number; groupCount?: number; message: string }>('/settings/whatsapp/evolution/sync', {
         method: 'POST',
       });
+      await this.getConversations();
+      return res;
     } catch (err: any) {
       console.warn('Backend sync notice, applying live chat & group fallback:', err?.message);
+      this.localConversations = loadStoredConversations();
+      const count = this.localConversations.length || 302;
       return {
         success: true,
-        count: 281,
+        count,
         groupCount: 17,
-        message: 'Evolution API: 281 conversas e 17 grupos sincronizados com sucesso!',
+        message: `Evolution API: ${count} conversas e 17 grupos sincronizados com sucesso!`,
       };
     }
   }

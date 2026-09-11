@@ -1,6 +1,9 @@
 import { Conversation, Customer, Message, User, WhatsAppGroup } from '../types';
+import { SNAPSHOT_CONVERSATIONS, SNAPSHOT_MESSAGES, SNAPSHOT_GROUPS } from './whatsappSnapshotData';
 
 export const USERS_STORAGE_KEY = 'realizzetravel_users';
+export const CONVS_STORAGE_KEY = 'realizze_local_convs';
+export const MSGS_STORAGE_KEY = 'realizze_local_msgs';
 
 export function loadStoredUsers(): User[] {
   if (typeof window === 'undefined') return [...DEMO_USERS];
@@ -23,6 +26,29 @@ export function saveStoredUsers(users: User[]): void {
     localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
   } catch (e) {
     console.warn('Falha ao salvar usuários no localStorage', e);
+  }
+}
+
+export function loadStoredConversations(): Conversation[] {
+  if (typeof window === 'undefined') return [...SNAPSHOT_CONVERSATIONS];
+  try {
+    const raw = localStorage.getItem(CONVS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {}
+  return [...SNAPSHOT_CONVERSATIONS];
+}
+
+export function saveStoredConversations(convs: Conversation[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(CONVS_STORAGE_KEY, JSON.stringify(convs));
+  } catch (e) {
+    console.warn('Falha ao salvar conversas no localStorage', e);
   }
 }
 
@@ -156,11 +182,11 @@ export const DEMO_CUSTOMERS: Customer[] = [
   },
 ];
 
-export const DEMO_CONVERSATIONS: Conversation[] = [];
+export const DEMO_CONVERSATIONS: Conversation[] = SNAPSHOT_CONVERSATIONS;
 
-export const DEMO_MESSAGES: Record<string, Message[]> = {};
+export const DEMO_MESSAGES: Record<string, Message[]> = SNAPSHOT_MESSAGES;
 
-export const DEMO_WHATSAPP_GROUPS: WhatsAppGroup[] = [
+export const DEMO_WHATSAPP_GROUPS: WhatsAppGroup[] = SNAPSHOT_GROUPS.length > 0 ? SNAPSHOT_GROUPS : [
   {
     id: '120363420887882625@g.us',
     name: 'Cotação - REALIZZE TRAVEL',

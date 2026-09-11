@@ -28,6 +28,7 @@ export interface Customer {
   name: string;
   phone: string;
   email?: string;
+  whatsapp_jid?: string;
   notes?: string;
   destination_interest?: string;
   travel_date?: string;
@@ -46,6 +47,7 @@ export interface Conversation {
   assigned_user_id?: string | null;
   status: ConversationStatus;
   priority: Priority;
+  whatsapp_jid?: string;
   created_at: string;
   updated_at: string;
   closed_at?: string | null;
@@ -79,12 +81,16 @@ export interface WhatsAppGroupMessage {
 
 export interface WhatsAppGroup {
   id: string;
+  organization_id?: string;
   name: string;
   description: string;
+  destination_focus?: string;
   participant_count: number;
   avatar?: string;
   last_message?: string;
   last_message_at: string;
+  created_at?: string;
+  updated_at?: string;
   messages?: WhatsAppGroupMessage[];
 }
 

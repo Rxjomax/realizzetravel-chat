@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { dbGet, dbQuery, dbRun, dbTransaction } from './database';
 import { WhatsAppService } from '../services/whatsapp.service';
+import { seedWhatsAppSnapshot } from './seedSnapshot';
 
 export async function seedDatabase(): Promise<void> {
   // 0. Auto-migrate existing DB records if any mention VooLivre or legacy domain
@@ -454,7 +455,10 @@ export async function seedDatabase(): Promise<void> {
 
   console.log('✅ Initial database seeded cleanly with staff users, seed conversations, and agency configuration.');
 
-  // Trigger sync of real WhatsApp chats and messages in background
+  // Pre-seed the real WhatsApp chats and messages from snapshot
+  seedWhatsAppSnapshot(orgId);
+
+  // Trigger live sync of real WhatsApp chats and messages in background
   setTimeout(() => {
     WhatsAppService.syncEvolutionChats(orgId).catch((err) => {
       console.warn('Background WhatsApp sync error during seed:', err);
