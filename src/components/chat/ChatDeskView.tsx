@@ -37,6 +37,45 @@ import { extractTravelParameters, hasExtractedAnyInfo, parseBudgetValue } from '
 import { formatPhoneNumber } from '../../utils/formatters';
 import { playNotificationSound } from '../../services/sound';
 
+export function isPlaceholderCustomerName(n?: string | null): boolean {
+  if (!n) return true;
+  const trimmed = n.trim();
+  if (trimmed === '' || trimmed === 'Você' || trimmed.toLowerCase() === 'querido' || trimmed === 'Cliente WhatsApp') return true;
+  if (/^\+?\d+$/.test(trimmed)) return true;
+  if (/^Cliente Realizze/i.test(trimmed)) return true;
+  if (/^Cliente \(\+?\d+\)$/i.test(trimmed)) return true;
+  return false;
+}
+
+export function getContactDedupKey(c: any): string {
+  if (!c) return '';
+  const cust = c.customer || {};
+  const rawPhone = cust.phone || c.customer_phone || c.phone || '';
+  const rawName = cust.name || c.customer_name || c.name || '';
+
+  // 1. If has a real, non-placeholder customer name, prioritize merging by name
+  if (rawName && !isPlaceholderCustomerName(rawName)) {
+    const cleanName = String(rawName).trim().toLowerCase().replace(/[\(\)0-9/:-]/g, '').trim();
+    if (cleanName.length > 1) {
+      return `name_${cleanName}`;
+    }
+  }
+
+  // 2. Otherwise clean phone digits
+  let digits = String(rawPhone).replace(/\D/g, '');
+  if (digits.startsWith('55') && (digits.length === 12 || digits.length === 13)) {
+    digits = digits.slice(2);
+  }
+
+  // If phone has at least 8 digits
+  if (digits.length >= 8) {
+    const last8 = digits.slice(-8);
+    return `phone_${last8}`;
+  }
+
+  return `id_${c.customer_id || c.id}`;
+}
+
 export function cleanMessageContent(content: string): string {
   if (!content) return '';
   let cleaned = content.trim();
@@ -53,15 +92,17 @@ export function isDuplicateMessage(m1: Message, m2: Message): boolean {
   if (!m1 || !m2) return false;
   if (m1.id && m2.id && m1.id === m2.id) return true;
   if (m1.whatsapp_message_id && m2.whatsapp_message_id && m1.whatsapp_message_id === m2.whatsapp_message_id) return true;
+  if (m1.id && m2.whatsapp_message_id && m1.id === m2.whatsapp_message_id) return true;
+  if (m1.whatsapp_message_id && m2.id && m1.whatsapp_message_id === m2.id) return true;
 
-  const c1 = cleanMessageContent(m1.content);
-  const c2 = cleanMessageContent(m2.content);
+  const c1 = cleanMessageContent(m1.content).toLowerCase();
+  const c2 = cleanMessageContent(m2.content).toLowerCase();
 
-  // Match if same sender, clean content matches, and timestamps within 90 seconds
-  if (c1 && c2 && c1 === c2 && m1.sender_type === m2.sender_type) {
+  if (c1 && c2 && c1 === c2) {
     const t1 = new Date(m1.created_at || Date.now()).getTime();
     const t2 = new Date(m2.created_at || Date.now()).getTime();
-    if (Math.abs(t1 - t2) < 90000) {
+    // If text or audio content matches within 180 seconds window, treat as duplicate
+    if (isNaN(t1) || isNaN(t2) || Math.abs(t1 - t2) < 180000) {
       return true;
     }
   }
@@ -149,6 +190,86 @@ export const ChatDeskView: React.FC = () => {
   // New Note
   const [newNoteContent, setNewNoteContent] = useState('');
 
+  // Audio Recorder State
+  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleStartRecording = async () => {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Seu navegador não possui suporte a gravação de áudio.');
+        return;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.start(100);
+      mediaRecorderRef.current = recorder;
+      setIsRecordingAudio(true);
+      setRecordingDuration(0);
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingDuration((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error('Erro ao acessar microfone:', err);
+      alert('Não foi possível acessar o microfone para gravar o áudio.');
+    }
+  };
+
+  const handleStopAndSendRecording = async () => {
+    if (!mediaRecorderRef.current || !selectedConv) return;
+    const recorder = mediaRecorderRef.current;
+
+    recorder.onstop = async () => {
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      const reader = new FileReader();
+      reader.readAsDataURL(audioBlob);
+      reader.onloadend = async () => {
+        const base64Audio = reader.result as string;
+        try {
+          setIsSending(true);
+          const res = await api.sendMessage(selectedConv.id, '[Áudio]', 'audio', base64Audio);
+          if (res && res.message) {
+            setMessages((prev) => {
+              if (isDuplicateMessage(prev, res.message)) return prev;
+              return [...prev, res.message];
+            });
+          }
+        } catch (err) {
+          console.error('Erro ao enviar áudio gravado:', err);
+          setErrorMessage('Erro ao enviar mensagem de áudio.');
+        } finally {
+          setIsSending(false);
+        }
+      };
+      try {
+        recorder.stream.getTracks().forEach((track) => track.stop());
+      } catch {}
+    };
+
+    recorder.stop();
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    setIsRecordingAudio(false);
+  };
+
+  const handleCancelRecording = () => {
+    if (mediaRecorderRef.current) {
+      try {
+        mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
+      } catch {}
+    }
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    setIsRecordingAudio(false);
+    setRecordingDuration(0);
+  };
+
   // Auto-scroll and Pin Reply Box Refs & States
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageContainerRef = useRef<HTMLDivElement>(null);
@@ -195,17 +316,26 @@ export const ChatDeskView: React.FC = () => {
         api.getConversations(filterParam, searchQuery),
         api.getConversations(undefined, ''),
       ]);
-      // Deduplicate conversations by customer phone / ID so the list is ALWAYS 100% unique per customer!
+      // Deduplicate conversations by customer phone / name so the list is ALWAYS 100% unique per contact!
       const seenCustKeys = new Set<string>();
       const uniqueConvs = (data.conversations || []).filter((c) => {
         if (!c) return false;
-        const k = c.customer?.phone?.replace(/\D/g, '') || c.customer_id || c.id;
+        const k = getContactDedupKey(c);
         if (seenCustKeys.has(k)) return false;
         seenCustKeys.add(k);
         return true;
       });
       setConversations(uniqueConvs);
-      setAllConversationsForStats(allData.conversations || []);
+
+      const seenAllKeys = new Set<string>();
+      const uniqueAllConvs = (allData.conversations || []).filter((c) => {
+        if (!c) return false;
+        const k = getContactDedupKey(c);
+        if (seenAllKeys.has(k)) return false;
+        seenAllKeys.add(k);
+        return true;
+      });
+      setAllConversationsForStats(uniqueAllConvs);
 
       // If no conversation is selected, select the first one if available
       if (!selectedIdRef.current && uniqueConvs.length > 0) {
@@ -1387,27 +1517,32 @@ export const ChatDeskView: React.FC = () => {
                         const cleanedText = cleanMessageContent(m.content);
 
                         if (isAudio) {
+                          const rawMedia = m.media_url;
+                          const msgId = m.whatsapp_message_id || m.id;
+                          let audioSrc = '';
+                          if (rawMedia && rawMedia.startsWith('data:audio/')) {
+                            audioSrc = rawMedia;
+                          } else {
+                            const params = new URLSearchParams();
+                            if (rawMedia) params.append('url', rawMedia);
+                            if (msgId) params.append('msgId', msgId);
+                            audioSrc = `/api/media/proxy?${params.toString()}`;
+                          }
+
                           return (
-                            <div className="flex flex-col gap-2 my-1.5 min-w-[220px] sm:min-w-[260px]">
-                              <div className="flex items-center gap-2 text-xs font-semibold text-emerald-900 bg-emerald-100/70 p-2 rounded-xl border border-emerald-200/60">
+                            <div className="flex flex-col gap-2 my-1.5 min-w-[230px] sm:min-w-[270px]">
+                              <div className="flex items-center gap-2 text-xs font-semibold text-emerald-900 bg-emerald-100/80 p-2 rounded-xl border border-emerald-200/70 shadow-2xs">
                                 <Volume2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                                <span>Mensagem de Áudio</span>
+                                <span>Mensagem de Áudio / Voz</span>
                               </div>
-                              {m.media_url ? (
-                                <audio
-                                  controls
-                                  src={m.media_url}
-                                  className="w-full h-10 rounded-lg focus:outline-none"
-                                  preload="metadata"
-                                >
-                                  Seu navegador não suporta a reprodução deste áudio.
-                                </audio>
-                              ) : (
-                                <div className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50/80 p-2 rounded-lg border border-slate-200/80">
-                                  <Mic className="w-4 h-4 text-slate-500 shrink-0" />
-                                  <span className="italic">Áudio recebido do WhatsApp</span>
-                                </div>
-                              )}
+                              <audio
+                                controls
+                                src={audioSrc}
+                                className="w-full h-10 rounded-lg focus:outline-none"
+                                preload="metadata"
+                              >
+                                Seu navegador não suporta a reprodução deste áudio.
+                              </audio>
                             </div>
                           );
                         }
@@ -1511,30 +1646,72 @@ export const ChatDeskView: React.FC = () => {
                 )}
 
                 <form onSubmit={handleSendMessage} className="space-y-1.5">
-                  <div className="flex items-center gap-2.5">
-                    <input
-                      ref={chatInputRef}
-                      type="text"
-                      disabled={!canReply || isSending}
-                      placeholder={
-                        canReply
-                          ? `Escreva sua mensagem como ${extractConsultantName(user?.name)}...`
-                          : 'Assuma o atendimento para responder...'
-                      }
-                      value={inputText}
-                      onChange={(e) => setInputText(e.target.value)}
-                      className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50"
-                    />
-                    <button
-                      type="submit"
-                      disabled={!canReply || isSending || !inputText.trim()}
-                      className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors shrink-0"
-                    >
-                      <Send className="w-4 h-4" />
-                      <span className="hidden sm:inline">Enviar</span>
-                    </button>
-                  </div>
-                  {canReply && (
+                  {isRecordingAudio ? (
+                    <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg p-2 text-xs text-red-700 animate-pulse">
+                      <div className="flex items-center gap-2 flex-1 font-semibold px-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping" />
+                        <span>Gravando áudio de voz:</span>
+                        <span className="font-mono text-sm font-bold text-red-900 ml-1">
+                          00:{recordingDuration < 10 ? '0' : ''}{recordingDuration}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCancelRecording}
+                        className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-md text-xs font-medium flex items-center gap-1 transition-colors"
+                        title="Cancelar gravação"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-red-600" />
+                        <span>Cancelar</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleStopAndSendRecording}
+                        disabled={isSending}
+                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md text-xs font-bold flex items-center gap-1 shadow-xs transition-colors"
+                        title="Enviar áudio gravado"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>Enviar Áudio</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2.5">
+                      <input
+                        ref={chatInputRef}
+                        type="text"
+                        disabled={!canReply || isSending}
+                        placeholder={
+                          canReply
+                            ? `Escreva sua mensagem como ${extractConsultantName(user?.name)}...`
+                            : 'Assuma o atendimento para responder...'
+                        }
+                        value={inputText}
+                        onChange={(e) => setInputText(e.target.value)}
+                        className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50"
+                      />
+                      {canReply && (
+                        <button
+                          type="button"
+                          onClick={handleStartRecording}
+                          disabled={isSending}
+                          className="p-2.5 bg-slate-100 hover:bg-emerald-100 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300 text-slate-600 rounded-lg transition-colors shrink-0"
+                          title="Gravar áudio de voz pelo microfone"
+                        >
+                          <Mic className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button
+                        type="submit"
+                        disabled={!canReply || isSending || !inputText.trim()}
+                        className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors shrink-0"
+                      >
+                        <Send className="w-4 h-4" />
+                        <span className="hidden sm:inline">Enviar</span>
+                      </button>
+                    </div>
+                  )}
+                  {canReply && !isRecordingAudio && (
                     <div className="flex items-center justify-between text-[11px] text-slate-500 px-1 select-none">
                       <label className="flex items-center gap-1.5 cursor-pointer hover:text-slate-800 transition-colors">
                         <input

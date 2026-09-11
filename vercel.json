@@ -35,6 +35,10 @@
       "destination": "/api/settings/whatsapp/disconnect"
     },
     {
+      "source": "/api/media/proxy",
+      "destination": "/api/index?path=media/proxy"
+    },
+    {
       "source": "/api/webhooks/whatsapp",
       "destination": "/api/webhooks/whatsapp"
     },

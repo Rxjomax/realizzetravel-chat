@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import { dbGet, dbQuery, dbRun, dbTransaction } from '../db/database';
 import { authenticateToken, AuthenticatedRequest } from '../auth/middleware';
 import { broadcastEvent } from '../realtime/ws';
-import { WhatsAppService } from '../services/whatsapp.service';
+import { WhatsAppService, isPlaceholderCustomerName } from '../services/whatsapp.service';
 import { SNAPSHOT_CONVERSATIONS } from '../../src/services/whatsappSnapshotData';
 
 export const conversationsRouter = Router();
@@ -303,10 +303,32 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
 
     const rows = dbQuery<any>(sql, params);
 
-    // Deduplicate rows by customer phone or customer_id to guarantee no duplicate contacts in list
+    // Deduplicate rows by customer phone or name to guarantee no duplicate contacts in list
     const seenCustKeys = new Set<string>();
     const uniqueRows = rows.filter((r) => {
-      const k = r.customer_phone?.replace(/\D/g, '') || r.customer_id || r.id;
+      const cName = r.customer_name || '';
+      const cPhone = r.customer_phone || '';
+      
+      let k = '';
+      if (cName && !isPlaceholderCustomerName(cName)) {
+        const cleanName = cName.trim().toLowerCase().replace(/[\(\)0-9/:-]/g, '').trim();
+        if (cleanName.length > 1) {
+          k = `name_${cleanName}`;
+        }
+      }
+      
+      if (!k) {
+        let digits = String(cPhone).replace(/\D/g, '');
+        if (digits.startsWith('55') && (digits.length === 12 || digits.length === 13)) {
+          digits = digits.slice(2);
+        }
+        if (digits.length >= 8) {
+          k = `phone_${digits.slice(-8)}`;
+        } else {
+          k = `id_${r.customer_id || r.id}`;
+        }
+      }
+
       if (seenCustKeys.has(k)) return false;
       seenCustKeys.add(k);
       return true;

@@ -4,6 +4,45 @@ import QRCode from 'qrcode';
 
 const API_BASE = '/api';
 
+export function isPlaceholderCustomerName(n?: string | null): boolean {
+  if (!n) return true;
+  const trimmed = n.trim();
+  if (trimmed === '' || trimmed === 'Você' || trimmed.toLowerCase() === 'querido' || trimmed === 'Cliente WhatsApp') return true;
+  if (/^\+?\d+$/.test(trimmed)) return true;
+  if (/^Cliente Realizze/i.test(trimmed)) return true;
+  if (/^Cliente \(\+?\d+\)$/i.test(trimmed)) return true;
+  return false;
+}
+
+export function getContactDedupKey(c: any): string {
+  if (!c) return '';
+  const cust = c.customer || {};
+  const rawPhone = cust.phone || c.customer_phone || c.phone || '';
+  const rawName = cust.name || c.customer_name || c.name || '';
+
+  // 1. If has a real, non-placeholder customer name, prioritize merging by name
+  if (rawName && !isPlaceholderCustomerName(rawName)) {
+    const cleanName = String(rawName).trim().toLowerCase().replace(/[\(\)0-9/:-]/g, '').trim();
+    if (cleanName.length > 1) {
+      return `name_${cleanName}`;
+    }
+  }
+
+  // 2. Otherwise clean phone digits
+  let digits = String(rawPhone).replace(/\D/g, '');
+  if (digits.startsWith('55') && (digits.length === 12 || digits.length === 13)) {
+    digits = digits.slice(2);
+  }
+
+  // If phone has at least 8 digits
+  if (digits.length >= 8) {
+    const last8 = digits.slice(-8);
+    return `phone_${last8}`;
+  }
+
+  return `id_${c.customer_id || c.id}`;
+}
+
 class ApiService {
   private token: string | null = null;
   private isFallbackMode: boolean = false;
@@ -371,9 +410,9 @@ class ApiService {
       const data = await this.request<{ conversations: Conversation[] }>(`/conversations?${params.toString()}`);
       if (data && Array.isArray(data.conversations)) {
         const seenKeys = new Set<string>();
-        const deduped = data.conversations.filter((c) => {
+        const deduped = data.conversations.filter((c: any) => {
           if (!c) return false;
-          const k = c.customer?.phone?.replace(/\D/g, '') || c.customer_id || c.id;
+          const k = getContactDedupKey(c);
           if (seenKeys.has(k)) return false;
           seenKeys.add(k);
           return true;
@@ -392,6 +431,14 @@ class ApiService {
     }
 
     let result = [...this.localConversations];
+    const seenKeys = new Set<string>();
+    result = result.filter((c: any) => {
+      if (!c) return false;
+      const k = getContactDedupKey(c);
+      if (seenKeys.has(k)) return false;
+      seenKeys.add(k);
+      return true;
+    });
     if (filter) {
       const f = filter.toUpperCase();
       if (f === 'WAITING' || f === 'AGUARDANDO') {

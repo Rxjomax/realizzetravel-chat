@@ -64,7 +64,7 @@ export const SNAPSHOT_CONVERSATIONS: Conversation[] = [
     "customer": {
       "id": "cst_1789088130453_tlooe",
       "organization_id": "org_realizzetravel",
-      "name": "Cotação Orlando (07/02)",
+      "name": "JANA",
       "phone": "+47803170578647",
       "whatsapp_jid": "47803170578647@lid",
       "destination_interest": "Pacote de Viagem",
@@ -112,7 +112,7 @@ export const SNAPSHOT_CONVERSATIONS: Conversation[] = [
     "customer": {
       "id": "cst_1789088130907_woq7og",
       "organization_id": "org_realizzetravel",
-      "name": "Cotação Orlando (Hospedagem)",
+      "name": "JANA",
       "phone": "+107336081379416",
       "whatsapp_jid": "107336081379416@lid",
       "destination_interest": "Pacote de Viagem",
