@@ -35,18 +35,26 @@ import { extractTravelParameters, hasExtractedAnyInfo, parseBudgetValue } from '
 import { formatPhoneNumber } from '../../utils/formatters';
 import { playNotificationSound } from '../../services/sound';
 
-export function extractConsultantName(fullName?: string): string {
+export function extractConsultantName(fullName?: string | null): string {
   if (!fullName) return 'Atendente';
   const parenMatch = fullName.match(/\(([^)]+)\)/);
-  // If format is "Carlos Santos (Administrador)", we can use "Carlos Santos" or "Carlos"
-  const cleanName = fullName.replace(/\s*\([^)]*\)/g, '').trim();
-  if (cleanName) {
-    return cleanName;
+  const beforeParen = fullName.replace(/\s*\([^)]*\)/g, '').trim();
+
+  // If format is "Consultor 1 (João Silva)" or "Consultor 2 (Maria Oliveira)", extract the real name inside parentheses
+  if (/^Consultor/i.test(beforeParen) && parenMatch && parenMatch[1]) {
+    return parenMatch[1].trim();
   }
+
+  // If format is "Carlos Santos (Administrador)", human name is before parentheses
+  if (beforeParen && !/^(Consultor|Atendente|Agente)/i.test(beforeParen)) {
+    return beforeParen;
+  }
+
   if (parenMatch && parenMatch[1]) {
     return parenMatch[1].trim();
   }
-  return fullName;
+
+  return beforeParen || fullName;
 }
 
 export const ChatDeskView: React.FC = () => {
@@ -54,6 +62,7 @@ export const ChatDeskView: React.FC = () => {
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConvId, setSelectedConvId] = useState<string | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
   const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [events, setEvents] = useState<any[]>([]);
@@ -161,17 +170,23 @@ export const ChatDeskView: React.FC = () => {
       setAllConversationsForStats(allData.conversations || []);
 
       // If no conversation is selected, select the first one if available
-      if (!selectedConvId && uniqueConvs.length > 0) {
+      if (!selectedIdRef.current && uniqueConvs.length > 0) {
+        selectedIdRef.current = uniqueConvs[0].id;
         setSelectedConvId(uniqueConvs[0].id);
+        setSelectedConv(uniqueConvs[0]);
       }
     } catch (err) {
       console.error('Error fetching conversations:', err);
     }
-  }, [activeFilter, searchQuery, selectedConvId]);
+  }, [activeFilter, searchQuery]);
 
   const fetchConversationDetails = useCallback(async (id: string) => {
     try {
       const data = await api.getConversationDetails(id);
+      if (selectedIdRef.current && id !== selectedIdRef.current) {
+        // Discard stale response if user switched chats quickly
+        return;
+      }
       if (!data || !data.conversation) {
         setSelectedConv(null);
         setMessages([]);
@@ -180,18 +195,28 @@ export const ChatDeskView: React.FC = () => {
         return;
       }
       setSelectedConv(data.conversation);
-      // Deduplicate messages by ID to prevent duplicate key errors
+      // Deduplicate messages by ID and echo content within 60s
       const seenMsgIds = new Set<string>();
       let msgsList = data.messages || [];
       if (msgsList.length === 0 && data.conversation.last_message) {
         msgsList = [data.conversation.last_message];
       }
-      const uniqueMsgs = msgsList.filter((m: Message) => {
+      const uniqueMsgs: Message[] = [];
+      for (const m of msgsList) {
         const msgKey = m.id || `temp_${Math.random()}`;
-        if (seenMsgIds.has(msgKey)) return false;
+        if (seenMsgIds.has(msgKey)) continue;
         seenMsgIds.add(msgKey);
-        return true;
-      });
+
+        const isEcho = uniqueMsgs.some(
+          (prev) =>
+            prev.sender_type === m.sender_type &&
+            prev.content?.trim() === m.content?.trim() &&
+            Math.abs(new Date(prev.created_at).getTime() - new Date(m.created_at).getTime()) < 60000
+        );
+        if (isEcho) continue;
+
+        uniqueMsgs.push(m);
+      }
       setMessages(uniqueMsgs);
       setEvents(data.events || []);
       setNotes(data.notes || []);
@@ -245,12 +270,26 @@ export const ChatDeskView: React.FC = () => {
     }
   }, []);
 
+  const handleSelectConversation = useCallback((conv: Conversation) => {
+    if (selectedIdRef.current === conv.id) return;
+    selectedIdRef.current = conv.id;
+    setSelectedConvId(conv.id);
+    setSelectedConv(conv); // INSTANT visual switch with zero delay!
+    if (conv.last_message) {
+      setMessages([conv.last_message]);
+    } else {
+      setMessages([]);
+    }
+    fetchConversationDetails(conv.id);
+  }, [fetchConversationDetails]);
+
   useEffect(() => {
     fetchConversations();
   }, [fetchConversations]);
 
   useEffect(() => {
     if (selectedConvId) {
+      selectedIdRef.current = selectedConvId;
       fetchConversationDetails(selectedConvId);
     }
   }, [selectedConvId, fetchConversationDetails]);
@@ -259,12 +298,12 @@ export const ChatDeskView: React.FC = () => {
   useEffect(() => {
     const timer = setInterval(() => {
       fetchConversations();
-      if (selectedConvId) {
-        fetchConversationDetails(selectedConvId);
+      if (selectedIdRef.current) {
+        fetchConversationDetails(selectedIdRef.current);
       }
-    }, 3000);
+    }, 4000);
     return () => clearInterval(timer);
-  }, [fetchConversations, selectedConvId, fetchConversationDetails]);
+  }, [fetchConversations, fetchConversationDetails]);
 
   // Realtime listeners
   useEffect(() => {
@@ -275,7 +314,7 @@ export const ChatDeskView: React.FC = () => {
 
     const unbindAssigned = socketClient.on('conversation:assigned', (payload) => {
       fetchConversations();
-      if (selectedConvId === payload.conversationId) {
+      if (selectedIdRef.current === payload.conversationId) {
         fetchConversationDetails(payload.conversationId);
       }
     });
@@ -284,70 +323,83 @@ export const ChatDeskView: React.FC = () => {
       if (payload?.message?.sender_type === 'CUSTOMER') {
         playNotificationSound('message');
       }
-      if (selectedConvId === payload.conversationId) {
+      if (selectedIdRef.current === payload.conversationId) {
         setMessages((prev) => {
           if (prev.some((m) => m.id === payload.message.id)) return prev;
+          const isEcho = prev.some(
+            (m) =>
+              m.sender_type === payload.message.sender_type &&
+              m.content?.trim() === payload.message.content?.trim() &&
+              Math.abs(new Date(m.created_at).getTime() - new Date(payload.message.created_at).getTime()) < 60000
+          );
+          if (isEcho) return prev;
           return [...prev, payload.message];
         });
       }
       fetchConversations();
     });
 
+    const unbindMsgsUpdated = socketClient.on('conversation:messages_updated', (payload: any) => {
+      if (selectedIdRef.current === payload?.conversationId && Array.isArray(payload.messages)) {
+        const seenMsgIds = new Set<string>();
+        const unique = payload.messages.filter((m: Message) => {
+          const k = m.id || `m_${Math.random()}`;
+          if (seenMsgIds.has(k)) return false;
+          seenMsgIds.add(k);
+          return true;
+        });
+        setMessages(unique);
+      }
+    });
+
     const unbindTransferred = socketClient.on('conversation:transferred', (payload) => {
       fetchConversations();
-      if (selectedConvId === payload.conversationId) {
+      if (selectedIdRef.current === payload.conversationId) {
         fetchConversationDetails(payload.conversationId);
       }
     });
 
     const unbindClosed = socketClient.on('conversation:closed', (payload) => {
       fetchConversations();
-      if (selectedConvId === payload.conversationId) {
+      if (selectedIdRef.current === payload.conversationId) {
         fetchConversationDetails(payload.conversationId);
       }
     });
 
     const unbindReopened = socketClient.on('conversation:reopened', (payload) => {
       fetchConversations();
-      if (selectedConvId === payload.conversationId) {
+      if (selectedIdRef.current === payload.conversationId) {
         fetchConversationDetails(payload.conversationId);
       }
     });
 
     const unbindPollSync = socketClient.on('poll:sync', () => {
       fetchConversations();
-      if (selectedConvId) {
-        fetchConversationDetails(selectedConvId);
+      if (selectedIdRef.current) {
+        fetchConversationDetails(selectedIdRef.current);
       }
     });
 
     const unbindCleared = socketClient.on('conversation:cleared', () => {
       fetchConversations();
+      selectedIdRef.current = null;
       setSelectedConv(null);
       setSelectedConvId(null);
       setMessages([]);
     });
 
-    // Guaranteed polling interval for instant message reception
-    const intervalTimer = setInterval(() => {
-      fetchConversations();
-      if (selectedConvId) {
-        fetchConversationDetails(selectedConvId);
-      }
-    }, 3000);
-
     return () => {
-      clearInterval(intervalTimer);
       unbindCreated();
       unbindAssigned();
       unbindNewMsg();
+      unbindMsgsUpdated();
       unbindTransferred();
       unbindClosed();
       unbindReopened();
       unbindPollSync();
       unbindCleared();
     };
-  }, [fetchConversations, fetchConversationDetails, selectedConvId]);
+  }, [fetchConversations, fetchConversationDetails]);
 
   // Auto-scroll to bottom on conversation change
   useEffect(() => {
@@ -867,7 +919,7 @@ export const ChatDeskView: React.FC = () => {
               type="button"
               onClick={() => {
                 setActiveFilter('REMINDERS');
-                if (dueTodayReminders[0]) setSelectedConvId(dueTodayReminders[0].id);
+                if (dueTodayReminders[0]) handleSelectConversation(dueTodayReminders[0]);
               }}
               className="text-[10px] bg-white text-amber-950 px-2 py-0.5 rounded-md font-bold hover:bg-amber-50 cursor-pointer transition-colors shadow-2xs"
             >
@@ -912,7 +964,7 @@ export const ChatDeskView: React.FC = () => {
               return (
                 <div
                   key={c.id}
-                  onClick={() => setSelectedConvId(c.id)}
+                  onClick={() => handleSelectConversation(c)}
                   className={`p-3.5 cursor-pointer transition-all relative flex items-start gap-3 ${
                     isSelected
                       ? 'bg-blue-50/90 border-l-4 border-blue-600 shadow-xs'
@@ -965,7 +1017,7 @@ export const ChatDeskView: React.FC = () => {
                       ) : c.assigned_user ? (
                         <span className="text-slate-500 font-medium flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                          Atendente: {c.assigned_user.name.split(' ')[0]}
+                          Atendente: {extractConsultantName(c.assigned_user.name)}
                         </span>
                       ) : (
                         <span className="text-slate-400">Sem atendente</span>
@@ -1046,7 +1098,7 @@ export const ChatDeskView: React.FC = () => {
                     <span>{formatPhoneNumber(selectedConv.customer?.phone)}</span>
                     {selectedConv.assigned_user && (
                       <span className="text-slate-600 font-medium">
-                        • Atendente: <strong className="text-slate-700">{selectedConv.assigned_user.name}</strong>
+                        • Atendente: <strong className="text-slate-700">{extractConsultantName(selectedConv.assigned_user.name)}</strong>
                       </span>
                     )}
                   </div>
@@ -1787,7 +1839,7 @@ export const ChatDeskView: React.FC = () => {
                   <option value="">Selecione um atendente...</option>
                   {availableAgents.map((ag) => (
                     <option key={ag.id} value={ag.id}>
-                      {ag.name} ({ag.status === 'ONLINE' ? '🟢 Online' : '🔴 Offline'})
+                      {extractConsultantName(ag.name)} ({ag.status === 'ONLINE' ? '🟢 Online' : '🔴 Offline'})
                     </option>
                   ))}
                 </select>

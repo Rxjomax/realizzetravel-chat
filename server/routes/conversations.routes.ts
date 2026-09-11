@@ -247,28 +247,6 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
     } else if (normFilter === 'OPEN' || normFilter === 'EM ATENDIMENTO' || normFilter === 'ANDAMENTO') {
       sql += " AND c.status IN ('OPEN', 'ASSIGNED')";
     } else if (normFilter === 'MY' || normFilter === 'MINE' || normFilter === 'MINHAS') {
-      // If this consultant has 0 assigned conversations, auto-assign top active conversations
-      const myCount = dbGet<{ count: number }>(
-        "SELECT COUNT(*) as count FROM conversations WHERE (organization_id = ? OR organization_id = 'org_realizzetravel') AND assigned_user_id = ?",
-        [orgId, userId]
-      )?.count || 0;
-
-      if (myCount === 0) {
-        try {
-          const unassigned = dbQuery<any>(
-            `SELECT c.id FROM conversations c 
-             WHERE (c.organization_id = ? OR c.organization_id = 'org_realizzetravel')
-               AND c.assigned_user_id IS NULL
-               AND (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) > 0
-             ORDER BY c.last_message_at DESC LIMIT 2`,
-            [orgId]
-          );
-          for (const u of unassigned) {
-            dbRun("UPDATE conversations SET assigned_user_id = ?, status = 'OPEN', updated_at = datetime('now') WHERE id = ?", [userId, u.id]);
-          }
-        } catch {}
-      }
-
       sql += " AND c.status IN ('OPEN', 'ASSIGNED') AND c.assigned_user_id = ?";
       params.push(userId);
     } else if (normFilter === 'CLOSED' || normFilter === 'ENCERRADAS' || normFilter === 'FINALIZADAS') {
@@ -379,8 +357,8 @@ conversationsRouter.get('/:id', authenticateToken, async (req: AuthenticatedRequ
       return;
     }
 
-    // If few messages exist in local DB, attempt dynamic live fetch from Evolution API
-    let messages = dbQuery<any>(
+    // Query local messages immediately for instant response
+    const messages = dbQuery<any>(
       `SELECT DISTINCT m.*, u.name as sender_name, u.avatar as sender_avatar
        FROM messages m
        LEFT JOIN users u ON u.id = m.sender_id
@@ -392,23 +370,30 @@ conversationsRouter.get('/:id', authenticateToken, async (req: AuthenticatedRequ
 
     const targetJid = conv.whatsapp_jid || conv.customer_whatsapp_jid || (conv.customer_phone?.includes('@') ? conv.customer_phone : null);
 
+    // If few messages exist in local DB, fetch from Evolution API asynchronously in background without blocking response
     if (messages.length <= 1 && (targetJid || conv.customer_phone)) {
-      await WhatsAppService.fetchCustomerMessagesFromEvolution(
+      WhatsAppService.fetchCustomerMessagesFromEvolution(
         targetJid || conv.customer_phone,
         convId,
         conv.customer_id,
         orgId
-      ).catch(() => {});
-
-      messages = dbQuery<any>(
-        `SELECT DISTINCT m.*, u.name as sender_name, u.avatar as sender_avatar
-         FROM messages m
-         LEFT JOIN users u ON u.id = m.sender_id
-         WHERE m.conversation_id = ?
-            OR (m.conversation_id IN (SELECT id FROM conversations WHERE customer_id = ?))
-         ORDER BY m.created_at ASC`,
-        [convId, conv.customer_id]
-      );
+      ).then(() => {
+        const fresh = dbQuery<any>(
+          `SELECT DISTINCT m.*, u.name as sender_name, u.avatar as sender_avatar
+           FROM messages m
+           LEFT JOIN users u ON u.id = m.sender_id
+           WHERE m.conversation_id = ?
+              OR (m.conversation_id IN (SELECT id FROM conversations WHERE customer_id = ?))
+           ORDER BY m.created_at ASC`,
+          [convId, conv.customer_id]
+        );
+        if (fresh.length > messages.length) {
+          broadcastEvent('conversation:messages_updated', {
+            conversationId: convId,
+            messages: fresh,
+          }, orgId);
+        }
+      }).catch(() => {});
     }
 
     const events = dbQuery<any>(
@@ -572,7 +557,7 @@ conversationsRouter.post('/:id/messages', authenticateToken, (req: Authenticated
     }
 
     const conv = dbGet<any>(
-      'SELECT c.id, c.customer_id, c.assigned_user_id, c.status, cust.phone, cust.name FROM conversations c LEFT JOIN customers cust ON c.customer_id = cust.id WHERE c.id = ? AND c.organization_id = ?',
+      'SELECT c.id, c.customer_id, c.assigned_user_id, c.status, c.whatsapp_jid, cust.phone, cust.name FROM conversations c LEFT JOIN customers cust ON c.customer_id = cust.id WHERE c.id = ? AND c.organization_id = ?',
       [convId, orgId]
     );
 
@@ -643,8 +628,13 @@ conversationsRouter.post('/:id/messages', authenticateToken, (req: Authenticated
     }
 
     // Send to WhatsApp via active integration (Meta Cloud API or QR Code Gateway)
-    if (conv?.phone) {
-      WhatsAppService.sendTextMessage(conv.phone, content.trim(), orgId).catch((waErr) => {
+    const targetRecipient = conv?.whatsapp_jid || conv?.phone;
+    if (targetRecipient) {
+      WhatsAppService.sendTextMessage(targetRecipient, content.trim(), orgId).then((res) => {
+        if (res.messageId) {
+          dbRun('UPDATE messages SET whatsapp_message_id = ?, status = ? WHERE id = ?', [res.messageId, 'delivered', msgId]);
+        }
+      }).catch((waErr) => {
         console.warn('Warning sending WhatsApp message to external provider:', waErr);
       });
     }

@@ -83,6 +83,22 @@ interface AppShellProps {
   children: React.ReactNode;
 }
 
+function cleanUserName(name?: string | null): string {
+  if (!name) return 'Usuário';
+  const parenMatch = name.match(/\(([^)]+)\)/);
+  const beforeParen = name.replace(/\s*\([^)]*\)/g, '').trim();
+  if (/^Consultor/i.test(beforeParen) && parenMatch && parenMatch[1]) {
+    return parenMatch[1].trim();
+  }
+  if (beforeParen && !/^(Consultor|Atendente|Agente)/i.test(beforeParen)) {
+    return beforeParen;
+  }
+  if (parenMatch && parenMatch[1]) {
+    return parenMatch[1].trim();
+  }
+  return beforeParen || name;
+}
+
 export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, children }) => {
   const { user, logout, updateUserStatus } = useAuth();
   const [statusDropdownOpen, setStatusDropdownOpen] = useState(false);
@@ -488,7 +504,7 @@ export const AppShell: React.FC<AppShellProps> = ({ currentTab, onTabChange, chi
             )}
             <div className="hidden md:block text-left">
               <div className="text-xs font-bold text-slate-800 leading-tight flex items-center gap-1.5">
-                {user?.name}
+                {cleanUserName(user?.name)}
               </div>
               <div className="mt-0.5">{getRoleBadge(user?.role)}</div>
             </div>

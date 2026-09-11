@@ -107,12 +107,51 @@ customersRouter.put('/:id', authenticateToken, (req: AuthenticatedRequest, res: 
       ]
     );
 
-    res.json({ success: true, message: 'Dados da viagem atualizados com sucesso.' });
+    const updatedCustomer = dbGet('SELECT * FROM customers WHERE id = ? AND organization_id = ?', [customerId, orgId]);
+    res.json({ success: true, message: 'Dados do cliente atualizados com sucesso.', customer: updatedCustomer });
   } catch (error) {
     console.error('Error updating customer:', error);
     res.status(500).json({ error: 'Erro ao atualizar dados do cliente.' });
   }
 });
+
+// PUT & PATCH /api/customers/:id/travel-params - Update customer travel parameters from AI or form
+const handleTravelParams = (req: AuthenticatedRequest, res: Response): void => {
+  try {
+    const orgId = req.user!.organization_id;
+    const customerId = req.params.id;
+    const { destination_interest, travel_date, passenger_count, budget } = req.body;
+    const now = new Date().toISOString();
+
+    dbRun(
+      `UPDATE customers
+       SET destination_interest = COALESCE(?, destination_interest),
+           travel_date = COALESCE(?, travel_date),
+           passenger_count = COALESCE(?, passenger_count),
+           budget = COALESCE(?, budget),
+           updated_at = ?
+       WHERE id = ? AND organization_id = ?`,
+      [
+        destination_interest?.trim() || null,
+        travel_date || null,
+        passenger_count || null,
+        budget?.trim() || null,
+        now,
+        customerId,
+        orgId,
+      ]
+    );
+
+    const updatedCustomer = dbGet('SELECT * FROM customers WHERE id = ? AND organization_id = ?', [customerId, orgId]);
+    res.json({ success: true, message: 'Parâmetros da viagem atualizados com sucesso.', customer: updatedCustomer });
+  } catch (error) {
+    console.error('Error updating travel params:', error);
+    res.status(500).json({ error: 'Erro ao atualizar parâmetros da viagem.' });
+  }
+};
+
+customersRouter.put('/:id/travel-params', authenticateToken, handleTravelParams);
+customersRouter.patch('/:id/travel-params', authenticateToken, handleTravelParams);
 
 // POST /api/customers/:id/notes - Add attendant note
 customersRouter.post('/:id/notes', authenticateToken, (req: AuthenticatedRequest, res: Response): void => {

@@ -40,6 +40,38 @@ export interface WhatsAppCredentials {
   zapiClientToken?: string;
 }
 
+export const VERIFIED_LID_PROFILES: Record<string, { name: string; avatar?: string }> = {
+  '47803170578647@lid': { name: 'Cotação Orlando (07/02)' },
+  '107336081379416@lid': { name: 'Cotação Orlando (Hospedagem)' },
+  '139715386814577@lid': { name: 'Família Assis' },
+  '238941965926624@lid': { name: 'Lourdes' },
+  '25744772186141@lid': { name: 'Naftaly' },
+  '54172640620569@lid': { name: 'Gisele' },
+  '59618558496881@lid': { name: 'Cliente (+55 81 99535-7254)' },
+  '238731546075247@lid': { name: 'Jessica' },
+  '144070483677212@lid': { name: 'Paula' },
+  '275908984369381@lid': { name: 'Jaciane' },
+  '262874060570747@lid': { name: 'Thalyta' },
+  '169818862940323@lid': { name: 'João Matheus' },
+  '45479459086368@lid': { name: 'Cliente Aniversário (Novembro)' },
+  '55113121050645@lid': { name: 'Cliente Realizze (São Paulo)' },
+  '232658529439963@lid': { name: 'Jullars (Beto Carrero)' },
+  '156860829180127@lid': { name: 'Cotação Beto Carrero' },
+  '205664576110683@lid': { name: 'Cauã' },
+  '52931445448873@lid': { name: 'Ilma' },
+  '184116674830485@lid': { name: 'Paulo' },
+};
+
+export function isPlaceholderCustomerName(n?: string | null): boolean {
+  if (!n) return true;
+  const trimmed = n.trim();
+  if (trimmed === '' || trimmed === 'Você' || trimmed.toLowerCase() === 'querido' || trimmed === 'Cliente WhatsApp') return true;
+  if (/^\+?\d+$/.test(trimmed)) return true;
+  if (/^Cliente Realizze/i.test(trimmed)) return true;
+  if (/^Cliente \(\+?\d+\)$/i.test(trimmed)) return true;
+  return false;
+}
+
 export class WhatsAppService {
   public static resolveOrganizationId(orgId?: string): string {
     if (orgId && orgId !== 'org_voolivre') return orgId;
@@ -189,13 +221,16 @@ export class WhatsAppService {
     organizationId = 'org_realizzetravel'
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const creds = this.getCredentials(organizationId);
-    let cleanPhone = to.replace(/\D/g, '');
-    if (cleanPhone.startsWith('0')) {
-      cleanPhone = cleanPhone.replace(/^0+/, '');
-    }
-    // Ensure Brazilian numbers include country code 55
-    if ((cleanPhone.length === 10 || cleanPhone.length === 11) && !cleanPhone.startsWith('55')) {
-      cleanPhone = `55${cleanPhone}`;
+    let cleanPhone = to.trim();
+    if (!cleanPhone.includes('@')) {
+      cleanPhone = cleanPhone.replace(/\D/g, '');
+      if (cleanPhone.startsWith('0')) {
+        cleanPhone = cleanPhone.replace(/^0+/, '');
+      }
+      // Ensure Brazilian numbers include country code 55
+      if ((cleanPhone.length === 10 || cleanPhone.length === 11) && !cleanPhone.startsWith('55')) {
+        cleanPhone = `55${cleanPhone}`;
+      }
     }
 
     // PRIMARY OPTION: OFFICIAL META CLOUD API
@@ -693,8 +728,33 @@ export class WhatsAppService {
           return;
         }
       }
+
+      // If it's an AGENT message coming back from WhatsApp (echo), check if we recently sent it locally
+      if (senderType === 'AGENT') {
+        const existingLocal = dbGet<any>(
+          `SELECT id FROM messages 
+           WHERE conversation_id = ? 
+             AND sender_type = 'AGENT' 
+             AND (content = ? OR content LIKE ?)
+             AND datetime(created_at) >= datetime('now', '-3 minutes')
+           LIMIT 1`,
+          [conversation.id, content, `%${content}%`]
+        );
+        if (existingLocal) {
+          if (whatsappMessageId) {
+            dbRun('UPDATE messages SET whatsapp_message_id = ?, status = ? WHERE id = ?', [whatsappMessageId, 'delivered', existingLocal.id]);
+          }
+          return;
+        }
+      }
+
+      // Check for rapid-fire duplicate inbound message within 5 seconds only
       const dupByContent = dbGet<any>(
-        'SELECT id FROM messages WHERE conversation_id = ? AND content = ? LIMIT 1',
+        `SELECT id FROM messages 
+         WHERE conversation_id = ? 
+           AND content = ? 
+           AND datetime(created_at) >= datetime('now', '-5 seconds') 
+         LIMIT 1`,
         [conversation.id, content]
       );
       if (dupByContent && content !== 'Conversa sincronizada') {
@@ -1305,7 +1365,7 @@ export class WhatsAppService {
 
                 // Upsert customer in database
                 const existingCust = dbGet<any>(
-                  `SELECT id, avatar FROM customers 
+                  `SELECT id, name, avatar FROM customers 
                    WHERE organization_id = ? 
                      AND (phone = ? OR phone = ? OR REPLACE(REPLACE(REPLACE(phone, '+', ''), ' ', ''), '-', '') = ?)
                    LIMIT 1`,
@@ -1320,8 +1380,17 @@ export class WhatsAppService {
                      VALUES (?, ?, ?, ?, ?, ?, ?)`,
                     [custId, organizationId, cName, `+${cleanPhone}`, custAvatar, now, now]
                   );
-                } else if (cAvatar && cAvatar !== existingCust.avatar) {
-                  dbRun('UPDATE customers SET avatar = ?, name = COALESCE(NULLIF(name, "Você"), ?), updated_at = ? WHERE id = ?', [cAvatar, cName, now, existingCust.id]);
+                } else {
+                  // Only update avatar if changed; NEVER overwrite existing real customer names with placeholders
+                  const isExistingPlaceholder = isPlaceholderCustomerName(existingCust.name);
+                  const isNewReal = !isPlaceholderCustomerName(cName) && !cName.startsWith('Cliente (+');
+                  if (cAvatar && cAvatar !== existingCust.avatar && isExistingPlaceholder && isNewReal) {
+                    dbRun('UPDATE customers SET avatar = ?, name = ?, updated_at = ? WHERE id = ?', [cAvatar, cName, now, existingCust.id]);
+                  } else if (cAvatar && cAvatar !== existingCust.avatar) {
+                    dbRun('UPDATE customers SET avatar = ?, updated_at = ? WHERE id = ?', [cAvatar, now, existingCust.id]);
+                  } else if (isExistingPlaceholder && isNewReal) {
+                    dbRun('UPDATE customers SET name = ?, updated_at = ? WHERE id = ?', [cName, now, existingCust.id]);
+                  }
                 }
               }
             }
@@ -1351,7 +1420,15 @@ export class WhatsAppService {
           let directChatsAssignedMaria = curMariaCount;
 
           for (const item of sortedChats) {
-            const remoteJid = item.id || item.remoteJid || item.jid || '';
+            // ALWAYS prefer the real WhatsApp remoteJid or jid (e.g. 5581...@s.whatsapp.net or ...@lid), NEVER a Prisma CUID (cmtw...)
+            const rawJid = (item.remoteJid && item.remoteJid.includes('@'))
+              ? item.remoteJid
+              : ((item.jid && item.jid.includes('@'))
+                  ? item.jid
+                  : ((item.lastMessage?.key?.remoteJid && item.lastMessage.key.remoteJid.includes('@'))
+                      ? item.lastMessage.key.remoteJid
+                      : (item.remoteJid || item.jid || '')));
+            const remoteJid = String(rawJid).trim();
             if (!remoteJid || remoteJid.includes('@broadcast')) continue;
 
             const isGroup = remoteJid.includes('@g.us');
@@ -1363,40 +1440,56 @@ export class WhatsAppService {
             const matchedContact = contactsMap.get(cleanPhone) || contactsMap.get(remoteJid);
             
             const lMsg = item.lastMessage;
+            const seconds = lMsg?.message?.audioMessage?.seconds;
+            const audioStr = seconds 
+              ? `[Áudio ${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}]`
+              : '[Áudio]';
             const msgContent =
               lMsg?.message?.conversation ||
               lMsg?.message?.extendedTextMessage?.text ||
               lMsg?.message?.imageMessage?.caption ||
               (lMsg?.message?.imageMessage ? '[Foto]' : null) ||
-              (lMsg?.message?.audioMessage ? '[Áudio]' : null) ||
+              (lMsg?.message?.audioMessage ? audioStr : null) ||
               (lMsg?.message?.documentMessage ? (lMsg?.message?.documentMessage?.fileName || '[Documento]') : null) ||
               (lMsg?.message?.videoMessage ? '[Vídeo]' : null) ||
               (lMsg?.message?.stickerMessage ? '[Figurinha]' : null) ||
               null;
 
-            let name = (item.pushName || item.name || matchedContact?.name || '').trim();
-            if (name === 'Você' || /^\d+$/.test(name)) name = '';
+            // Accurate name resolution: Verified mapping -> Contact pushName -> Chat pushName -> Message greeting
+            let name = '';
+            if (VERIFIED_LID_PROFILES[remoteJid]) {
+              name = VERIFIED_LID_PROFILES[remoteJid].name;
+            } else if (matchedContact?.name && !isPlaceholderCustomerName(matchedContact.name)) {
+              name = matchedContact.name.trim();
+            } else if (item.pushName && !isPlaceholderCustomerName(item.pushName)) {
+              name = item.pushName.trim();
+            } else if (item.name && !isPlaceholderCustomerName(item.name)) {
+              name = item.name.trim();
+            }
 
-            if (!name && lMsg?.pushName && lMsg.pushName !== 'Você' && !/^\d+$/.test(lMsg.pushName.trim())) {
+            if (!name && lMsg?.pushName && !isPlaceholderCustomerName(lMsg.pushName)) {
               name = lMsg.pushName.trim();
             }
 
             if (!name && msgContent) {
-              const greetingMatch = String(msgContent).match(/(?:Ok|Olá|Oi|Bom dia|Boa tarde|Boa noite)\s+([A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]+)/i);
-              const forbidden = ['Você', 'Querido', 'Querida', 'Pessoal', 'Cliente', 'Amigo', 'Amiga', 'Realizze', 'Travel', 'Equipe', 'Obrigada', 'Obrigado', 'Por', 'Sim', 'Não', 'Tudo', 'Bom', 'Boa', 'Amore', 'Enviada', 'Aguardar'];
-              if (greetingMatch && !forbidden.includes(greetingMatch[1])) {
+              const greetingMatch = String(msgContent).match(/(?:Ok|Olá|Ola|Oi|Bom dia|Boa tarde|Boa noite)\s+([A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]+)/i);
+              const forbidden = new Set([
+                'Você', 'Querido', 'Querida', 'Pessoal', 'Cliente', 'Amigo', 'Amiga', 'Realizze', 'Travel',
+                'Equipe', 'Obrigada', 'Obrigado', 'Por', 'Sim', 'Não', 'Tudo', 'Bom', 'Boa', 'Amore', 'Enviada',
+                'Aguardar', 'Segue', 'Passando', 'Certeza', 'Outras', 'Suas', 'Café', 'Pela', 'Registrada', 'Avaliacao'
+              ]);
+              if (greetingMatch && !forbidden.has(greetingMatch[1])) {
                 name = greetingMatch[1];
               }
             }
 
             if (!name) {
               if (isGroup) {
-                name = item.pushName || 'Grupo Realizze Travel';
+                name = item.pushName || item.name || 'Grupo Realizze Travel';
               } else if (cleanPhone && cleanPhone.length >= 8 && !remoteJid.includes('@lid')) {
                 name = `Cliente (+${cleanPhone})`;
               } else {
-                const shortId = remoteJid.replace('@lid', '').replace('@s.whatsapp.net', '').slice(-4);
-                name = `Cliente Realizze (${shortId || 'WhatsApp'})`;
+                name = 'Cliente WhatsApp';
               }
             }
 
@@ -1424,8 +1517,11 @@ export class WhatsAppService {
               );
               customer = { id: custId, name, phone: phoneFormatted, avatar: custAvatar, whatsapp_jid: remoteJid };
             } else {
-              if (name && name !== 'Você' && (customer.name === 'Você' || customer.name.startsWith('Cliente Realizze ('))) {
+              // ONLY update customer name if the current name is a placeholder AND the new name is real!
+              // NEVER overwrite an existing real human name!
+              if (isPlaceholderCustomerName(customer.name) && !isPlaceholderCustomerName(name)) {
                 dbRun('UPDATE customers SET name = ?, updated_at = ? WHERE id = ?', [name, now, customer.id]);
+                customer.name = name;
               }
               if (avatar && avatar !== customer.avatar) {
                 dbRun('UPDATE customers SET avatar = ?, updated_at = ? WHERE id = ?', [avatar, now, customer.id]);
@@ -1442,11 +1538,11 @@ export class WhatsAppService {
 
             const convId = conversation ? conversation.id : `cnv_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
-            // Smart consultant assignment for Consultor 1 (João Silva) and Consultor 2 (Maria Oliveira)
+            // Initial consultant assignment for new conversations
             let assignedUserId: string | null = conversation?.assigned_user_id || null;
             let status = conversation?.status || 'WAITING';
 
-            if (!isGroup && !assignedUserId) {
+            if (!conversation && !isGroup && !assignedUserId) {
               if (directChatsAssignedJoao < 3) {
                 assignedUserId = 'usr_joao'; // Consultor 1
                 status = 'OPEN';
@@ -1465,15 +1561,16 @@ export class WhatsAppService {
                 [convId, organizationId, customer.id, remoteJid, assignedUserId, status, lastMsgTime, now, lastMsgTime]
               );
             } else {
+              // Stable conversation update: NEVER overwrite assigned_user_id or status for already existing conversations!
+              // This completely eliminates attendant and status flickering!
+              // Also ensure any lingering cuid (cmtw...) is overwritten with the genuine WhatsApp JID!
               dbRun(
                 `UPDATE conversations 
-                 SET whatsapp_jid = ?, 
-                     assigned_user_id = COALESCE(assigned_user_id, ?), 
-                     status = CASE WHEN assigned_user_id IS NULL AND ? IS NOT NULL THEN 'OPEN' ELSE status END, 
+                 SET whatsapp_jid = CASE WHEN (whatsapp_jid IS NULL OR whatsapp_jid LIKE 'cmtw%') THEN ? ELSE whatsapp_jid END, 
                      last_message_at = ?, 
                      updated_at = ? 
                  WHERE id = ?`,
-                [remoteJid, assignedUserId, assignedUserId, lastMsgTime, now, conversation.id]
+                [remoteJid, lastMsgTime, now, conversation.id]
               );
             }
 
@@ -1487,6 +1584,24 @@ export class WhatsAppService {
 
               const exists = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [msgId]);
               if (!exists) {
+                // If it's an agent message, check if we recently sent it locally without a whatsapp_message_id
+                if (isFromMe) {
+                  const localAgentMsg = dbGet<any>(
+                    `SELECT id FROM messages 
+                     WHERE conversation_id = ? 
+                       AND sender_type = 'AGENT' 
+                       AND (content = ? OR content LIKE ?)
+                       AND datetime(created_at) >= datetime('now', '-5 minutes')
+                     LIMIT 1`,
+                    [convId, String(msgContent), `%${String(msgContent)}%`]
+                  );
+                  if (localAgentMsg) {
+                    dbRun('UPDATE messages SET whatsapp_message_id = ?, status = ? WHERE id = ?', [msgId, 'delivered', localAgentMsg.id]);
+                    importedChats++;
+                    continue;
+                  }
+                }
+
                 const localMsgId = `msg_hist_${Date.now()}_${Math.random().toString(36).substring(7)}`;
                 const senderId = isFromMe ? (assignedUserId || 'usr_joao') : customer.id;
                 dbRun(
@@ -1494,6 +1609,24 @@ export class WhatsAppService {
                    VALUES (?, ?, ?, ?, ?, 'text', ?, ?, 'delivered', ?)`,
                   [localMsgId, organizationId, convId, isFromMe ? 'AGENT' : 'CUSTOMER', senderId, String(msgContent), msgId, msgTime]
                 );
+
+                if (!isFromMe) {
+                  broadcastEvent('message:new', {
+                    conversationId: convId,
+                    message: {
+                      id: localMsgId,
+                      organization_id: organizationId,
+                      conversation_id: convId,
+                      sender_type: 'CUSTOMER',
+                      sender_id: customer.id,
+                      message_type: 'text',
+                      content: String(msgContent),
+                      whatsapp_message_id: msgId,
+                      status: 'delivered',
+                      created_at: msgTime,
+                    },
+                  }, organizationId);
+                }
               }
             }
 
@@ -1916,9 +2049,9 @@ export class WhatsAppService {
           [latestTimestamp, now, conversationId]
         );
 
-        if (detectedCustomerName) {
+        if (detectedCustomerName && !isPlaceholderCustomerName(detectedCustomerName)) {
           const currentCust = dbGet<any>('SELECT name FROM customers WHERE id = ?', [customerId]);
-          if (currentCust && (currentCust.name.startsWith('Cliente Realizze') || currentCust.name === 'Você' || /^\+?\d+$/.test(currentCust.name))) {
+          if (currentCust && isPlaceholderCustomerName(currentCust.name)) {
             dbRun('UPDATE customers SET name = ?, updated_at = ? WHERE id = ?', [detectedCustomerName, now, customerId]);
           }
         }
@@ -1928,23 +2061,148 @@ export class WhatsAppService {
     }
   }
 
-  private static autoSyncTimer: NodeJS.Timeout | null = null;
+  /**
+   * Ultra-fast poller (runs every ~3.5s) to guarantee instant arrival of new incoming messages
+   * even if webhooks are routed elsewhere or delayed.
+   */
+  public static async pollRecentEvolutionMessages(organizationId = 'org_realizzetravel'): Promise<void> {
+    try {
+      const creds = this.getCredentials(organizationId);
+      const baseUrl = (creds.gatewayUrl || process.env.EVOLUTION_GATEWAY_URL || 'http://151.244.40.72:8080').trim().replace(/\/+$/, '');
+      const inst = (creds.instanceName && creds.instanceName !== 'realizze-travel') ? creds.instanceName.trim() : (process.env.EVOLUTION_INSTANCE_NAME || 'realizze-oficial');
+      const key = (creds.apiKey || process.env.EVOLUTION_API_KEY || 'Realizze@SecretKey2026').trim();
 
-  public static startAutoSyncWorker(intervalMs = 25000): void {
+      const res = await fetchWithTimeout(`${baseUrl}/chat/findMessages/${inst}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: key },
+        body: JSON.stringify({ limit: 25 }),
+      }, 3000);
+
+      if (!res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      const records = data?.messages?.records || (Array.isArray(data) ? data : []);
+      if (!Array.isArray(records) || records.length === 0) return;
+
+      // Process oldest to newest so sequential order is preserved
+      const reversed = [...records].reverse();
+
+      for (const r of reversed) {
+        const key = r.key || {};
+        const msgId = key.id || r.id;
+        if (!msgId) continue;
+
+        // Skip if message is already recorded in SQLite
+        const exists = dbGet<any>('SELECT id FROM messages WHERE whatsapp_message_id = ?', [msgId]);
+        if (exists) continue;
+
+        const remoteJid = key.remoteJid || r.remoteJid || '';
+        if (!remoteJid || remoteJid.includes('@broadcast')) continue;
+
+        const isFromMe = key.fromMe === true || r.fromMe === true;
+        const remoteJidAlt = key.remoteJidAlt || '';
+
+        let cleanPhone = '';
+        if (remoteJidAlt && remoteJidAlt.includes('@s.whatsapp.net')) {
+          cleanPhone = remoteJidAlt.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+        } else if (remoteJid.includes('@s.whatsapp.net')) {
+          cleanPhone = remoteJid.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+        } else {
+          cleanPhone = remoteJid.replace(/@.*$/, '').replace(/\D/g, '');
+        }
+
+        const isGroup = remoteJid.includes('@g.us');
+        const seconds = r.message?.audioMessage?.seconds;
+        const audioStr = seconds 
+          ? `[Áudio ${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}]`
+          : '[Áudio]';
+
+        const content =
+          r.message?.conversation ||
+          r.message?.extendedTextMessage?.text ||
+          r.message?.imageMessage?.caption ||
+          (r.message?.imageMessage ? '[Foto]' : null) ||
+          (r.message?.audioMessage ? audioStr : null) ||
+          (r.message?.documentMessage ? (r.message?.documentMessage?.fileName || '[Documento]') : null) ||
+          (r.message?.videoMessage ? '[Vídeo]' : null) ||
+          (r.message?.stickerMessage ? '[Figurinha]' : null) ||
+          null;
+
+        if (!content) continue;
+
+        const pushName = r.pushName || '';
+
+        if (isGroup) {
+          this.processInboundGroupMessage({
+            organizationId,
+            groupId: remoteJid,
+            senderName: pushName || 'Participante',
+            senderPhone: key.participant ? String(key.participant).replace(/\D/g, '') : undefined,
+            content: String(content),
+            isFromAgency: isFromMe,
+          });
+          continue;
+        }
+
+        let name = pushName;
+        if (VERIFIED_LID_PROFILES[remoteJid]) {
+          name = VERIFIED_LID_PROFILES[remoteJid].name;
+        } else if (!name || isPlaceholderCustomerName(name)) {
+          if (cleanPhone && cleanPhone.length >= 8 && !remoteJid.includes('@lid')) {
+            name = `Cliente (+${cleanPhone})`;
+          } else {
+            name = 'Cliente WhatsApp';
+          }
+        }
+
+        const msgType = r.message?.imageMessage
+          ? 'image'
+          : r.message?.documentMessage
+          ? 'document'
+          : r.message?.audioMessage
+          ? 'audio'
+          : 'text';
+
+        this.processInboundMessage({
+          organizationId,
+          phone: cleanPhone.length >= 8 ? `+${cleanPhone}` : `+${remoteJid.replace(/\D/g, '')}`,
+          name,
+          content: String(content),
+          messageType: msgType,
+          mediaUrl: null,
+          whatsappMessageId: msgId,
+          senderType: isFromMe ? 'AGENT' : 'CUSTOMER',
+        });
+      }
+    } catch {
+      // quiet catch
+    }
+  }
+
+  private static autoSyncTimer: NodeJS.Timeout | null = null;
+  private static messagePollTimer: NodeJS.Timeout | null = null;
+
+  public static startAutoSyncWorker(intervalMs = 30000): void {
     if (this.autoSyncTimer) return;
     console.log(`🔄 [WhatsAppService] Sincronização automática em segundo plano ativada (intervalo: ${intervalMs / 1000}s)`);
 
     // Run initial sync after a short delay on startup
     setTimeout(() => {
       this.syncEvolutionChats('org_realizzetravel').catch(() => {});
-    }, 3000);
+      this.pollRecentEvolutionMessages('org_realizzetravel').catch(() => {});
+    }, 1500);
 
+    // Fast poller for instant message arrivals every 3.5 seconds
+    this.messagePollTimer = setInterval(async () => {
+      try {
+        await this.pollRecentEvolutionMessages('org_realizzetravel');
+      } catch {}
+    }, 3500);
+
+    // Deep sync of conversation lists every 30 seconds
     this.autoSyncTimer = setInterval(async () => {
       try {
         await this.syncEvolutionChats('org_realizzetravel');
-      } catch (err) {
-        // quiet catch
-      }
+      } catch {}
     }, intervalMs);
   }
 }
