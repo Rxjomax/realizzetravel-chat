@@ -346,7 +346,7 @@ conversationsRouter.get('/', authenticateToken, async (req: AuthenticatedRequest
 });
 
 // GET /api/conversations/:id - Get full conversation with messages
-conversationsRouter.get('/:id', authenticateToken, (req: AuthenticatedRequest, res: Response): void => {
+conversationsRouter.get('/:id', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const orgId = req.user!.organization_id;
     const convId = req.params.id;
@@ -371,8 +371,8 @@ conversationsRouter.get('/:id', authenticateToken, (req: AuthenticatedRequest, r
       return;
     }
 
-    // Retrieve all messages for this conversation, plus prior messages with this customer across previous tickets
-    const messages = dbQuery<any>(
+    // If few messages exist in local DB, attempt dynamic live fetch from Evolution API
+    let messages = dbQuery<any>(
       `SELECT DISTINCT m.*, u.name as sender_name, u.avatar as sender_avatar
        FROM messages m
        LEFT JOIN users u ON u.id = m.sender_id
@@ -381,6 +381,25 @@ conversationsRouter.get('/:id', authenticateToken, (req: AuthenticatedRequest, r
        ORDER BY m.created_at ASC`,
       [convId, conv.customer_id]
     );
+
+    if (messages.length <= 1 && conv.customer_phone) {
+      await WhatsAppService.fetchCustomerMessagesFromEvolution(
+        conv.customer_phone,
+        convId,
+        conv.customer_id,
+        orgId
+      ).catch(() => {});
+
+      messages = dbQuery<any>(
+        `SELECT DISTINCT m.*, u.name as sender_name, u.avatar as sender_avatar
+         FROM messages m
+         LEFT JOIN users u ON u.id = m.sender_id
+         WHERE m.conversation_id = ?
+            OR (m.conversation_id IN (SELECT id FROM conversations WHERE customer_id = ?))
+         ORDER BY m.created_at ASC`,
+        [convId, conv.customer_id]
+      );
+    }
 
     const events = dbQuery<any>(
       `SELECT e.*, u.name as user_name
