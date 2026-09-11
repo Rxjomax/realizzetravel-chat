@@ -15,12 +15,24 @@
       "destination": "/api/settings/whatsapp/evolution/reset"
     },
     {
+      "source": "/api/settings/whatsapp/evolution/sync",
+      "destination": "/api/settings/whatsapp/evolution/sync"
+    },
+    {
+      "source": "/api/settings/whatsapp/evolution/configure-webhook",
+      "destination": "/api/settings/whatsapp/evolution/configure-webhook"
+    },
+    {
       "source": "/api/settings/whatsapp/status",
       "destination": "/api/settings/whatsapp/status"
     },
     {
       "source": "/api/settings/whatsapp/config",
       "destination": "/api/settings/whatsapp/config"
+    },
+    {
+      "source": "/api/settings/whatsapp/disconnect",
+      "destination": "/api/settings/whatsapp/disconnect"
     },
     {
       "source": "/api/webhooks/whatsapp",

@@ -1283,9 +1283,9 @@ export class WhatsAppService {
     try {
       // Fetch Chats, Groups and Contacts in parallel with timeout safety
       const [groupsRes, contactsRes, chatsRes] = await Promise.allSettled([
-        fetchWithTimeout(`${baseUrl}/group/fetchAllGroups/${inst}?getParticipants=false`, { headers }, 10000),
-        fetchWithTimeout(`${baseUrl}/chat/findContacts/${inst}`, { method: 'POST', headers, body: JSON.stringify({}) }, 8000),
-        fetchWithTimeout(`${baseUrl}/chat/findChats/${inst}`, { method: 'POST', headers, body: JSON.stringify({}) }, 8000),
+        fetchWithTimeout(`${baseUrl}/group/fetchAllGroups/${inst}?getParticipants=false`, { headers }, 5000),
+        fetchWithTimeout(`${baseUrl}/chat/findContacts/${inst}`, { method: 'POST', headers, body: JSON.stringify({}) }, 4000),
+        fetchWithTimeout(`${baseUrl}/chat/findChats/${inst}`, { method: 'POST', headers, body: JSON.stringify({}) }, 4000),
       ]);
 
       // 1. Process WhatsApp Groups
